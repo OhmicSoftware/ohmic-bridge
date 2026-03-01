@@ -1,30 +1,34 @@
-# AbletonOSC: Control Ableton Live with OSC
+# Ohmic Bridge
 
-[![stability-beta](https://img.shields.io/badge/stability-beta-33bbff.svg)](https://github.com/mkenney/software-guides/blob/master/STABILITY-BADGES.md#beta)
+Ohmic Bridge is an Ableton Live Remote Script that provides an [Open Sound Control (OSC)](https://ccrma.stanford.edu/groups/osc/) interface between [Ohmic](https://github.com/OhmicSoftware) and [Ableton Live](https://www.ableton.com/en/live/).
 
-AbletonOSC is a MIDI remote script that provides an [Open Sound Control (OSC)](https://ccrma.stanford.edu/groups/osc/) interface to
-control [Ableton Live](https://www.ableton.com/en/live/). The project's aim is to expose the
-entire [Live Object Model](https://docs.cycling74.com/max8/vignettes/live_object_model) API
-([full API docs](https://structure-void.com/PythonLiveAPI_documentation/Live11.0.xml)), providing comprehensive control
-over Live's control interfaces using the same naming structure and object hierarchy as LOM.
+It exposes the [Live Object Model](https://docs.cycling74.com/max8/vignettes/live_object_model) API ([full API docs](https://structure-void.com/PythonLiveAPI_documentation/Live11.0.xml)) over OSC, providing comprehensive control over Live's tracks, clips, devices, transport, and more.
 
-# Installation
+## Forked from AbletonOSC
 
-AbletonOSC requires Ableton Live 11 or above.
+Ohmic Bridge is a fork of [AbletonOSC](https://github.com/ideoforms/AbletonOSC) by [Daniel Jones (ideoforms)](https://github.com/ideoforms), licensed under MIT. AbletonOSC is an excellent project that does the heavy lifting of bridging Ableton's Live Object Model to OSC — we forked rather than built from scratch because the foundation was already solid.
+
+**Why we forked:**
+
+- **Custom endpoints for Ohmic** — Ohmic needs endpoints that don't exist in AbletonOSC, such as song name/file path properties, a lightweight heartbeat for connection monitoring, and bulk session data endpoints for grid synchronization.
+- **Branding and identity** — Ohmic Bridge displays its own name in Ableton's Control Surface menu and logs, so users know which script is active.
+- **Independent release cycle** — Ohmic Bridge can ship updates on its own schedule without waiting for upstream changes or risking upstream breakage.
+- **Full compatibility** — All original AbletonOSC endpoints are preserved. Anything built for AbletonOSC works with Ohmic Bridge.
+
+## Installation
+
+Ohmic Bridge requires Ableton Live 11 or above.
 
 To install the script:
 
-- [Download a zip of this repository](https://github.com/ideoforms/AbletonOSC/archive/refs/heads/master.zip), unzip its contents, and rename `AbletonOSC-master` to `AbletonOSC`
-- Install it following the instructions on
-  Ableton's [Installing third-party remote scripts](https://help.ableton.com/hc/en-us/articles/209072009-Installing-third-party-remote-scripts)
-  doc, by copying the `AbletonOSC` folder to:
+- [Download a zip of this repository](https://github.com/OhmicSoftware/ohmic-bridge/archive/refs/heads/master.zip), unzip its contents, and rename `ohmic-bridge-master` to `Ohmic_Bridge`
+- Install it following the instructions on Ableton's [Installing third-party remote scripts](https://help.ableton.com/hc/en-us/articles/209072009-Installing-third-party-remote-scripts) doc, by copying the `Ohmic_Bridge` folder to:
     - **Windows**: `\Users\[username]\Documents\Ableton\User Library\Remote Scripts`
     - **macOS**: `Macintosh HD/Users/[username]/Music/Ableton/User Library/Remote Scripts`
 - Restart Live
-- In `Preferences > Link / Tempo / MIDI`, under the Control Surface dropdown, select the new "AbletonOSC" option. Live should display a message
-  saying "AbletonOSC: Listening for OSC on port 11000"
+- In `Settings > Link, Tempo & MIDI`, under the Control Surface dropdown, select **Ohmic_Bridge**. Live should display a message saying "Ohmic Bridge: Listening for OSC on port 11000"
 
-Activity logs will be output to a `logs` subdirectory. Logging granularity can be controlled with `/live/api/set/log_level` (see [Application API](#application-api) below). 
+Activity logs will be output to a `logs` subdirectory. Logging granularity can be controlled with `/live/api/set/log_level` (see [Application API](#application-api) below).
 
 # Usage
 
@@ -529,11 +533,11 @@ Note that, for consistency with other object types (and Live's internal API), **
 
 # Utilities
 
-Included with the framework is a command-line console utility `run-console.py`, which can be used as a quick and easy way to send OSC queries to AbletonOSC. Example:
+Included with the framework is a command-line console utility `run-console.py`, which can be used as a quick and easy way to send OSC queries to Ohmic Bridge. Example:
 
 ```
-(1653)(AbletonOSC)$ ./run-console.py
-AbletonOSC command console
+$ python run-console.py
+Ohmic Bridge command console
 Usage: /live/osc/command [params]
 >>> /live/song/set/tempo 123.0
 >>> /live/song/get/tempo
@@ -544,12 +548,11 @@ Usage: /live/osc/command [params]
 
 # Acknowledgements
 
-Thanks to [Stu Fisher](https://github.com/stufisher/) (and other authors) for [LiveOSC](https://livecontrol.q3f.org/ableton-liveapi/liveosc/), the spiritual predecessor to this
-library. Thanks to [Julien Bayle](https://structure-void.com/ableton-live-midi-remote-scripts/#liveAPI)
-and [NSUSpray](https://nsuspray.github.io/Live_API_Doc/) for providing XML API docs, based on original work
-by [Hanz Petrov](http://remotescripts.blogspot.com/p/support-files.html).
+Ohmic Bridge is a fork of [AbletonOSC](https://github.com/ideoforms/AbletonOSC) by [Daniel Jones (ideoforms)](https://github.com/ideoforms), released under the MIT license. The original project and its contributors built the foundation that makes Ohmic Bridge possible.
 
-For code contributions and feedback, many thanks to:
+Thanks to [Stu Fisher](https://github.com/stufisher/) (and other authors) for [LiveOSC](https://livecontrol.q3f.org/ableton-liveapi/liveosc/), the spiritual predecessor to AbletonOSC. Thanks to [Julien Bayle](https://structure-void.com/ableton-live-midi-remote-scripts/#liveAPI) and [NSUSpray](https://nsuspray.github.io/Live_API_Doc/) for providing XML API docs, based on original work by [Hanz Petrov](http://remotescripts.blogspot.com/p/support-files.html).
+
+For code contributions and feedback to the original AbletonOSC project, many thanks to:
 - Jörn Lengwenings ([Coupe70](https://github.com/Coupe70))
 - Bill Moser ([billmoser](https://github.com/billmoser))
 - [stevmills](https://github.com/stevmills)
@@ -557,4 +560,8 @@ For code contributions and feedback, many thanks to:
 - Mark Marijnissen ([markmarijnissen](https://github.com/markmarijnissen))
 - [capturcus](https://github.com/capturcus)
 - Esa Ruoho a.k.a. Lackluster ([esaruoho](https://github.com/esaruoho))
+
+# License
+
+MIT License. See [LICENSE](LICENSE) for details.
 
