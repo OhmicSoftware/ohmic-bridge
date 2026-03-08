@@ -167,6 +167,42 @@ class ClipHandler(AbletonOSCHandler):
         self.osc_server.add_handler("/live/clip/add/notes", create_clip_callback(clip_add_notes))
         self.osc_server.add_handler("/live/clip/remove/notes", create_clip_callback(clip_remove_notes))
 
+        # -------------------------------------------------------------------
+        # Arrangement clip endpoints
+        #
+        # Arrangement clips are accessed via track.arrangement_clips[index],
+        # NOT via clip_slots. Keep these handlers fully separate from session
+        # clip handlers — they may diverge in behavior over time.
+        # -------------------------------------------------------------------
+
+        def create_arrangement_clip_callback(func):
+            def arrangement_clip_callback(params: Tuple[Any]) -> Tuple:
+                track_index, clip_index = int(params[0]), int(params[1])
+                track = self.song.tracks[track_index]
+                clips = track.arrangement_clips
+                if clip_index < 0 or clip_index >= len(clips):
+                    return None
+                clip = clips[clip_index]
+                rv = func(clip, tuple(params[2:]))
+                if rv is not None:
+                    return (track_index, clip_index, *rv)
+            return arrangement_clip_callback
+
+        def arrangement_clip_get_notes(clip, params: Tuple[Any] = ()):
+            if len(params) == 4:
+                pitch_start, pitch_span, time_start, time_span = params
+            elif len(params) == 0:
+                pitch_start, pitch_span, time_start, time_span = 0, 127, -8192, 16384
+            else:
+                raise ValueError("Invalid number of arguments for /arrangement_clip/get/notes. Either 0 or 4 arguments must be passed.")
+            notes = clip.get_notes_extended(pitch_start, pitch_span, time_start, time_span)
+            all_note_attributes = []
+            for note in notes:
+                all_note_attributes += [note.pitch, note.start_time, note.duration, note.velocity, note.mute]
+            return tuple(all_note_attributes)
+
+        self.osc_server.add_handler("/live/arrangement_clip/get/notes", create_arrangement_clip_callback(arrangement_clip_get_notes))
+
         def clips_filter_handler(params: Tuple):
             # TODO: Pre-cache clip notes
             if len(self._clip_notes_cache) == 0:
