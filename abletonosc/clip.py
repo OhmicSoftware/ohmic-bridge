@@ -203,6 +203,58 @@ class ClipHandler(AbletonOSCHandler):
 
         self.osc_server.add_handler("/live/arrangement_clip/get/notes", create_arrangement_clip_callback(arrangement_clip_get_notes))
 
+        def arrangement_clip_add_notes(clip, params: Tuple[Any] = ()):
+            notes = []
+            for offset in range(0, len(params), 5):
+                pitch, start_time, duration, velocity, mute = params[offset:offset + 5]
+                note = Live.Clip.MidiNoteSpecification(start_time=float(start_time),
+                                                       duration=float(duration),
+                                                       pitch=int(pitch),
+                                                       velocity=float(velocity),
+                                                       mute=bool(mute))
+                notes.append(note)
+            try:
+                clip.add_new_notes(tuple(notes))
+                return (len(notes),)
+            except Exception as e:
+                self.logger.error("arrangement_clip_add_notes FAILED: %s" % e)
+                return (-1, str(e))
+
+        self.osc_server.add_handler("/live/arrangement_clip/add/notes", create_arrangement_clip_callback(arrangement_clip_add_notes))
+
+        def arrangement_clip_remove_notes(clip, params: Tuple[Any] = ()):
+            if len(params) == 4:
+                pitch_start, pitch_span, time_start, time_span = params
+            elif len(params) == 0:
+                pitch_start, pitch_span, time_start, time_span = 0, 127, -8192, 16384
+            else:
+                raise ValueError("Invalid number of arguments for /arrangement_clip/remove/notes. Either 0 or 4 arguments must be passed.")
+            clip.remove_notes_extended(pitch_start, pitch_span, time_start, time_span)
+
+        self.osc_server.add_handler("/live/arrangement_clip/remove/notes", create_arrangement_clip_callback(arrangement_clip_remove_notes))
+
+        def arrangement_clip_create(params: Tuple[Any]) -> Tuple:
+            track_index = int(params[0])
+            start_time = float(params[1])
+            length = float(params[2])
+            track = self.song.tracks[track_index]
+            track.create_midi_clip(start_time, length)
+            return (track_index, start_time, length)
+
+        self.osc_server.add_handler("/live/arrangement_clip/create", arrangement_clip_create)
+
+        def arrangement_clip_delete(params: Tuple[Any]) -> Tuple:
+            track_index = int(params[0])
+            clip_index = int(params[1])
+            track = self.song.tracks[track_index]
+            clips = track.arrangement_clips
+            if clip_index < 0 or clip_index >= len(clips):
+                return None
+            track.delete_clip(clips[clip_index])
+            return (track_index, clip_index)
+
+        self.osc_server.add_handler("/live/arrangement_clip/delete", arrangement_clip_delete)
+
         def clips_filter_handler(params: Tuple):
             # TODO: Pre-cache clip notes
             if len(self._clip_notes_cache) == 0:
