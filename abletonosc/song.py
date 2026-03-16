@@ -117,7 +117,7 @@ class SongHandler(AbletonOSCHandler):
             """Return track metadata + song scale in one call.
 
             Response: JSON string with track_names, track_colors, midi_tracks,
-            num_scenes, root_note, scale_name.
+            num_scenes, root_note, scale_name, tempo.
             """
             tracks = self.song.tracks
             num_scenes = len(self.song.scenes)
@@ -136,6 +136,7 @@ class SongHandler(AbletonOSCHandler):
                 "num_scenes": num_scenes,
                 "root_note": self.song.root_note,
                 "scale_name": self.song.scale_name,
+                "tempo": self.song.tempo,
             }
             return (json.dumps(data),)
         self.osc_server.add_handler("/live/song/get/session_info", session_info)
