@@ -139,18 +139,24 @@ class ClipHandler(AbletonOSCHandler):
             notes = clip.get_notes_extended(pitch_start, pitch_span, time_start, time_span)
             all_note_attributes = []
             for note in notes:
-                all_note_attributes += [note.pitch, note.start_time, note.duration, note.velocity, note.mute]
+                probability = note.probability if hasattr(note, 'probability') else 1.0
+                all_note_attributes += [note.pitch, note.start_time, note.duration, note.velocity, note.mute, probability]
             return tuple(all_note_attributes)
 
         def clip_add_notes(clip, params: Tuple[Any] = ()):
             notes = []
-            for offset in range(0, len(params), 5):
-                pitch, start_time, duration, velocity, mute = params[offset:offset + 5]
+            # Support both 5-param (legacy) and 6-param (with probability) formats
+            step = 6 if len(params) >= 6 and len(params) % 6 == 0 else 5
+            for offset in range(0, len(params), step):
+                chunk = params[offset:offset + step]
+                pitch, start_time, duration, velocity, mute = chunk[0], chunk[1], chunk[2], chunk[3], chunk[4]
+                probability = float(chunk[5]) if step == 6 else 1.0
                 note = Live.Clip.MidiNoteSpecification(start_time=start_time,
                                                        duration=duration,
                                                        pitch=pitch,
                                                        velocity=velocity,
-                                                       mute=mute)
+                                                       mute=mute,
+                                                       probability=probability)
                 notes.append(note)
             clip.add_new_notes(tuple(notes))
 
@@ -166,6 +172,174 @@ class ClipHandler(AbletonOSCHandler):
         self.osc_server.add_handler("/live/clip/get/notes", create_clip_callback(clip_get_notes))
         self.osc_server.add_handler("/live/clip/add/notes", create_clip_callback(clip_add_notes))
         self.osc_server.add_handler("/live/clip/remove/notes", create_clip_callback(clip_remove_notes))
+
+        # -------------------------------------------------------------------
+        # MIDI CC envelope endpoints
+        #
+        # Read/write/clear automation envelopes for MIDI CC parameters.
+        # CC envelopes are accessed through the clip's automation system.
+        # The track (clip.canonical_parent.canonical_parent) provides
+        # the device parameters that map to MIDI CCs.
+        # -------------------------------------------------------------------
+
+        def _find_cc_param(clip, cc_number):
+            """Find the DeviceParameter for a MIDI CC number.
+
+            Searches the track's device chain for a parameter whose name
+            matches the CC number (e.g. "Mod Wheel", "CC 1").
+            Returns the parameter or None.
+            """
+            try:
+                # Navigate: Clip -> ClipSlot -> Track
+                track = clip.canonical_parent.canonical_parent
+            except AttributeError:
+                return None
+
+            # Search all devices on the track for a matching CC parameter
+            for device in track.devices:
+                for param in device.parameters:
+                    try:
+                        name = param.name
+                        # Match patterns like "CC 1", "CC1", "Mod Wheel" etc.
+                        if name == "CC %d" % cc_number or name == "CC%d" % cc_number:
+                            return param
+                    except Exception:
+                        continue
+
+            # Also check mixer device for standard CC mappings
+            try:
+                mixer = track.mixer_device
+                if cc_number == 7:
+                    return mixer.volume
+                elif cc_number == 10:
+                    return mixer.panning
+            except Exception:
+                pass
+
+            return None
+
+        def clip_get_envelope(clip, params: Tuple[Any] = ()):
+            """Read CC automation envelope by sampling at regular intervals.
+
+            params: (cc_number,)
+            Returns: flat tuple of (time1, value1, time2, value2, ...)
+            """
+            if len(params) < 1:
+                raise ValueError("cc_number is required for /clip/get/envelope")
+            cc_number = int(params[0])
+            clip_length = clip.length
+
+            # Strategy 1: Search existing envelopes by parameter name
+            target_env = None
+            param = _find_cc_param(clip, cc_number)
+            if param is not None:
+                try:
+                    target_env = clip.automation_envelope(param)
+                except Exception:
+                    pass
+
+            # Strategy 2: Iterate existing envelopes
+            if target_env is None:
+                for env in clip.automation_envelopes:
+                    try:
+                        p = env.parameter
+                        p_name = str(getattr(p, 'name', ''))
+                        if ("CC %d" % cc_number) in p_name or ("CC%d" % cc_number) in p_name:
+                            target_env = env
+                            break
+                    except Exception:
+                        continue
+
+            if target_env is None:
+                return ()
+
+            # Sample the envelope at 8 points per beat
+            points_per_beat = 8
+            num_samples = max(1, int(clip_length * points_per_beat))
+            data = []
+            for i in range(num_samples + 1):
+                time = i / points_per_beat
+                if time > clip_length:
+                    time = clip_length
+                try:
+                    value = target_env.value_at_time(time)
+                except Exception:
+                    value = 0.0
+                data.append(time)
+                data.append(value)
+
+            return tuple(data)
+
+        def clip_set_envelope(clip, params: Tuple[Any] = ()):
+            """Write CC automation envelope to a clip.
+
+            params: (cc_number, time1, value1, time2, value2, ...)
+            Clears existing envelope, then writes all points via insert_step().
+            """
+            if len(params) < 3:
+                raise ValueError("cc_number and at least one (time, value) pair required")
+            cc_number = int(params[0])
+            points = params[1:]
+
+            if len(points) % 2 != 0:
+                raise ValueError("Points must be (time, value) pairs")
+
+            # Find the CC parameter
+            param = _find_cc_param(clip, cc_number)
+            if param is None:
+                self.logger.warning("Could not find parameter for CC %d" % cc_number)
+                return (-1,)
+
+            # Clear existing envelope
+            try:
+                clip.clear_envelope(param)
+            except Exception as e:
+                self.logger.warning("clear_envelope failed for CC %d: %s" % (cc_number, e))
+
+            # Get or create the envelope
+            try:
+                envelope = clip.automation_envelope(param)
+            except Exception as e:
+                self.logger.error("automation_envelope failed for CC %d: %s" % (cc_number, e))
+                return (-1,)
+
+            # Write all points
+            num_points = 0
+            for i in range(0, len(points), 2):
+                time = float(points[i])
+                value = float(points[i + 1])
+                try:
+                    envelope.insert_step(time, value, 0)
+                    num_points += 1
+                except Exception as e:
+                    self.logger.error("insert_step failed at time %.2f: %s" % (time, e))
+
+            return (num_points,)
+
+        def clip_clear_envelope(clip, params: Tuple[Any] = ()):
+            """Clear CC automation envelope from a clip.
+
+            params: (cc_number,)
+            """
+            if len(params) < 1:
+                raise ValueError("cc_number is required for /clip/clear/envelope")
+            cc_number = int(params[0])
+
+            param = _find_cc_param(clip, cc_number)
+            if param is None:
+                self.logger.warning("Could not find parameter for CC %d to clear" % cc_number)
+                return (-1,)
+
+            try:
+                clip.clear_envelope(param)
+                return (1,)
+            except Exception as e:
+                self.logger.error("clear_envelope failed for CC %d: %s" % (cc_number, e))
+                return (-1,)
+
+        self.osc_server.add_handler("/live/clip/get/envelope", create_clip_callback(clip_get_envelope))
+        self.osc_server.add_handler("/live/clip/set/envelope", create_clip_callback(clip_set_envelope))
+        self.osc_server.add_handler("/live/clip/clear/envelope", create_clip_callback(clip_clear_envelope))
 
         # -------------------------------------------------------------------
         # Arrangement clip endpoints
@@ -198,20 +372,25 @@ class ClipHandler(AbletonOSCHandler):
             notes = clip.get_notes_extended(pitch_start, pitch_span, time_start, time_span)
             all_note_attributes = []
             for note in notes:
-                all_note_attributes += [note.pitch, note.start_time, note.duration, note.velocity, note.mute]
+                probability = note.probability if hasattr(note, 'probability') else 1.0
+                all_note_attributes += [note.pitch, note.start_time, note.duration, note.velocity, note.mute, probability]
             return tuple(all_note_attributes)
 
         self.osc_server.add_handler("/live/arrangement_clip/get/notes", create_arrangement_clip_callback(arrangement_clip_get_notes))
 
         def arrangement_clip_add_notes(clip, params: Tuple[Any] = ()):
             notes = []
-            for offset in range(0, len(params), 5):
-                pitch, start_time, duration, velocity, mute = params[offset:offset + 5]
+            step = 6 if len(params) >= 6 and len(params) % 6 == 0 else 5
+            for offset in range(0, len(params), step):
+                chunk = params[offset:offset + step]
+                pitch, start_time, duration, velocity, mute = chunk[0], chunk[1], chunk[2], chunk[3], chunk[4]
+                probability = float(chunk[5]) if step == 6 else 1.0
                 note = Live.Clip.MidiNoteSpecification(start_time=float(start_time),
                                                        duration=float(duration),
                                                        pitch=int(pitch),
                                                        velocity=float(velocity),
-                                                       mute=bool(mute))
+                                                       mute=bool(mute),
+                                                       probability=probability)
                 notes.append(note)
             try:
                 clip.add_new_notes(tuple(notes))
