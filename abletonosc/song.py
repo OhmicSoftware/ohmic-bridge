@@ -129,11 +129,13 @@ class SongHandler(AbletonOSCHandler):
                 c = track.color
                 track_colors.append("#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF))
                 midi_tracks.append(bool(track.has_midi_input))
+            scene_names = [scene.name for scene in self.song.scenes]
             data = {
                 "track_names": track_names,
                 "track_colors": track_colors,
                 "midi_tracks": midi_tracks,
                 "num_scenes": num_scenes,
+                "scene_names": scene_names,
                 "root_note": self.song.root_note,
                 "scale_name": self.song.scale_name,
                 "tempo": self.song.tempo,
@@ -147,25 +149,29 @@ class SongHandler(AbletonOSCHandler):
             Response: JSON string with clips dict and clip_colors dict,
             keyed by "track_idx,slot_idx".
             """
-            tracks = self.song.tracks
-            num_scenes = len(self.song.scenes)
-            clips = {}
-            clip_colors = {}
-            for track_idx, track in enumerate(tracks):
-                for slot_idx, clip_slot in enumerate(track.clip_slots):
-                    if slot_idx >= num_scenes:
-                        break
-                    if clip_slot.clip is not None:
-                        key = "%d,%d" % (track_idx, slot_idx)
-                        name = clip_slot.clip.name
-                        clips[key] = name if name else "(unnamed)"
-                        c = clip_slot.clip.color
-                        clip_colors[key] = "#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
-            data = {
-                "clips": clips,
-                "clip_colors": clip_colors,
-            }
-            return (json.dumps(data),)
+            try:
+                tracks = self.song.tracks
+                num_scenes = len(self.song.scenes)
+                clips = {}
+                clip_colors = {}
+                for track_idx, track in enumerate(tracks):
+                    for slot_idx, clip_slot in enumerate(track.clip_slots):
+                        if slot_idx >= num_scenes:
+                            break
+                        if clip_slot.clip is not None:
+                            key = "%d,%d" % (track_idx, slot_idx)
+                            name = clip_slot.clip.name
+                            clips[key] = name if name else "(unnamed)"
+                            c = clip_slot.clip.color
+                            clip_colors[key] = "#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
+                data = {
+                    "clips": clips,
+                    "clip_colors": clip_colors,
+                }
+                return (json.dumps(data),)
+            except Exception as e:
+                self.logger.error("clip_grid FAILED: %s" % e)
+                return (json.dumps({"error": str(e)}),)
         self.osc_server.add_handler("/live/song/get/clip_grid", clip_grid)
 
         def song_get_track_data(params):
