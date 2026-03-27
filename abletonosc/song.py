@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+import traceback
 import Live
 import json
 from functools import partial
@@ -119,28 +120,46 @@ class SongHandler(AbletonOSCHandler):
             Response: JSON string with track_names, track_colors, midi_tracks,
             num_scenes, root_note, scale_name, tempo.
             """
-            tracks = self.song.tracks
-            num_scenes = len(self.song.scenes)
-            track_names = []
-            track_colors = []
-            midi_tracks = []
-            for track in tracks:
-                track_names.append(track.name)
-                c = track.color
-                track_colors.append("#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF))
-                midi_tracks.append(bool(track.has_midi_input))
-            scene_names = [scene.name for scene in self.song.scenes]
-            data = {
-                "track_names": track_names,
-                "track_colors": track_colors,
-                "midi_tracks": midi_tracks,
-                "num_scenes": num_scenes,
-                "scene_names": scene_names,
-                "root_note": self.song.root_note,
-                "scale_name": self.song.scale_name,
-                "tempo": self.song.tempo,
-            }
-            return (json.dumps(data),)
+            try:
+                tracks = self.song.tracks
+                num_scenes = len(self.song.scenes)
+                track_names = []
+                track_colors = []
+                midi_tracks = []
+                for ti, track in enumerate(tracks):
+                    try:
+                        track_names.append(track.name)
+                        c = track.color
+                        track_colors.append("#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF))
+                        midi_tracks.append(bool(track.has_midi_input))
+                    except Exception as te:
+                        self.logger.error("session_info track %d failed: %s\n%s" % (ti, te, traceback.format_exc()))
+                        track_names.append("(error)")
+                        track_colors.append("#808080")
+                        midi_tracks.append(False)
+                scene_names = []
+                for si, scene in enumerate(self.song.scenes):
+                    try:
+                        scene_names.append(scene.name)
+                    except Exception as se:
+                        self.logger.error("session_info scene %d failed: %s" % (si, se))
+                        scene_names.append("")
+                data = {
+                    "track_names": track_names,
+                    "track_colors": track_colors,
+                    "midi_tracks": midi_tracks,
+                    "num_scenes": num_scenes,
+                    "scene_names": scene_names,
+                    "root_note": self.song.root_note,
+                    "scale_name": self.song.scale_name,
+                    "tempo": self.song.tempo,
+                }
+                result = json.dumps(data)
+                self.logger.debug("session_info: %d tracks, %d scenes, %d bytes" % (len(track_names), num_scenes, len(result)))
+                return (result,)
+            except Exception as e:
+                self.logger.error("session_info FAILED: %s\n%s" % (e, traceback.format_exc()))
+                return (json.dumps({"error": str(e)}),)
         self.osc_server.add_handler("/live/song/get/session_info", session_info)
 
         def clip_grid(_):
@@ -158,19 +177,24 @@ class SongHandler(AbletonOSCHandler):
                     for slot_idx, clip_slot in enumerate(track.clip_slots):
                         if slot_idx >= num_scenes:
                             break
-                        if clip_slot.clip is not None:
-                            key = "%d,%d" % (track_idx, slot_idx)
-                            name = clip_slot.clip.name
-                            clips[key] = name if name else "(unnamed)"
-                            c = clip_slot.clip.color
-                            clip_colors[key] = "#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
+                        try:
+                            if clip_slot.clip is not None:
+                                key = "%d,%d" % (track_idx, slot_idx)
+                                name = clip_slot.clip.name
+                                clips[key] = name if name else "(unnamed)"
+                                c = clip_slot.clip.color
+                                clip_colors[key] = "#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
+                        except Exception as ce:
+                            self.logger.error("clip_grid slot [%d,%d] failed: %s" % (track_idx, slot_idx, ce))
                 data = {
                     "clips": clips,
                     "clip_colors": clip_colors,
                 }
-                return (json.dumps(data),)
+                result = json.dumps(data)
+                self.logger.debug("clip_grid: %d clips, %d bytes" % (len(clips), len(result)))
+                return (result,)
             except Exception as e:
-                self.logger.error("clip_grid FAILED: %s" % e)
+                self.logger.error("clip_grid FAILED: %s\n%s" % (e, traceback.format_exc()))
                 return (json.dumps({"error": str(e)}),)
         self.osc_server.add_handler("/live/song/get/clip_grid", clip_grid)
 
