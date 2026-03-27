@@ -15,7 +15,7 @@ class Manager(ControlSurface):
     def __init__(self, c_instance):
         ControlSurface.__init__(self, c_instance)
 
-        self.log_level = "info"
+        self.log_level = "warning"
 
         self.handlers = []
         self.midi_mappings = {}
@@ -46,6 +46,7 @@ class Manager(ControlSurface):
         log_path = os.path.join(log_dir, "abletonosc.log")
         self.log_file_handler = logging.FileHandler(log_path)
         self.log_file_handler.setLevel(self.log_level.upper())
+        logger.setLevel(self.log_level.upper())
         formatter = logging.Formatter('(%(asctime)s) [%(levelname)s] %(message)s')
         self.log_file_handler.setFormatter(formatter)
         logger.addHandler(self.log_file_handler)
@@ -80,6 +81,7 @@ class Manager(ControlSurface):
             assert log_level in ("debug", "info", "warning", "error", "critical")
             self.log_level = log_level
             self.log_file_handler.setLevel(self.log_level.upper())
+            logger.setLevel(self.log_level.upper())
         def show_message_callback(params):
             self.show_message(params[0])
 
