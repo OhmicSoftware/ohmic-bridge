@@ -11,6 +11,12 @@ import os
 
 logger = logging.getLogger("abletonosc")
 
+# Ohmic Bridge version. Ohmic checks this on connect via
+# /live/api/ohmic/bridge_version and refuses to proceed if it is lower
+# than its MIN_BRIDGE_VERSION — prevents silent mismatches when one
+# side of the Ohmic/Bridge pair is updated without the other.
+BRIDGE_VERSION = (0, 2, 0)
+
 class Manager(ControlSurface):
     def __init__(self, c_instance):
         ControlSurface.__init__(self, c_instance)
@@ -27,10 +33,11 @@ class Manager(ControlSurface):
             self.start_logging()
             self.init_api()
 
-            self.show_message("Ohmic Bridge: Listening for OSC on port %d" % abletonosc.OSC_LISTEN_PORT)
-            logger.info("Started Ohmic Bridge on address %s" % str(self.osc_server._local_addr))
+            version_str = ".".join(str(n) for n in BRIDGE_VERSION)
+            self.show_message("Ohmic Bridge v%s: Listening on port %d" % (version_str, abletonosc.OSC_LISTEN_PORT))
+            logger.info("Started Ohmic Bridge v%s on address %s" % (version_str, str(self.osc_server._local_addr)))
         except OSError as msg:
-            self.show_message("Ohmic Bridge: Couldn't bind to port %d (%s)" % (abletonosc.OSC_LISTEN_PORT, msg))
+            self.show_message("Ohmic Bridge: Port %d in use — disable AbletonOSC or remove duplicate Bridge install (%s)" % (abletonosc.OSC_LISTEN_PORT, msg))
             logger.info("Couldn't bind to port %d (%s)" % (abletonosc.OSC_LISTEN_PORT, msg))
 
 
@@ -84,12 +91,15 @@ class Manager(ControlSurface):
             logger.setLevel(self.log_level.upper())
         def show_message_callback(params):
             self.show_message(params[0])
+        def bridge_version_callback(params):
+            return BRIDGE_VERSION
 
         self.osc_server.add_handler("/live/test", test_callback)
         self.osc_server.add_handler("/live/api/reload", reload_callback)
         self.osc_server.add_handler("/live/api/get/log_level", get_log_level_callback)
         self.osc_server.add_handler("/live/api/set/log_level", set_log_level_callback)
         self.osc_server.add_handler("/live/api/show_message", show_message_callback)
+        self.osc_server.add_handler("/live/api/ohmic/bridge_version", bridge_version_callback)
 
         with self.component_guard():
             self.handlers = [

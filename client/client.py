@@ -6,8 +6,8 @@ from pythonosc.dispatcher import Dispatcher
 from pythonosc.osc_server import ThreadingOSCUDPServer
 from typing import Callable, Iterable
 
-REMOTE_PORT = 11000
-LOCAL_PORT = 11001
+REMOTE_PORT = 11002
+LOCAL_PORT = 11003
 
 #--------------------------------------------------------------------------------
 # An Ableton Live tick is 100ms. This constant is typically used for timeouts,
@@ -21,8 +21,8 @@ class AbletonOSCClient:
         Create a client to connect to an Ableton OSC instance.
         Args:
             hostname: The remote host to connect to.
-            port: The remote port to connect to. Defaults to 11000, the default AbletonOSC port.
-            client_port: The local port to bind to. Defaults to 11001, the default AbletonOSC reply port.
+            port: The remote port to connect to. Defaults to 11002, the Ohmic Bridge listen port.
+            client_port: The local port to bind to. Defaults to 11003, the Ohmic Bridge reply port.
         """
         dispatcher = Dispatcher()
         dispatcher.set_default_handler(self.handle_osc)
@@ -162,6 +162,6 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Client for AbletonOSC")
     parser.add_argument("--hostname", type=str, default="127.0.0.1")
-    parser.add_argument("--port", type=str, default=11000)
+    parser.add_argument("--port", type=str, default=11002)
     args = parser.parse_args()
     main(args)

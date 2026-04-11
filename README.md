@@ -26,13 +26,13 @@ To install the script:
     - **Windows**: `\Users\[username]\Documents\Ableton\User Library\Remote Scripts`
     - **macOS**: `Macintosh HD/Users/[username]/Music/Ableton/User Library/Remote Scripts`
 - Restart Live
-- In `Settings > Link, Tempo & MIDI`, under the Control Surface dropdown, select **Ohmic_Bridge**. Live should display a message saying "Ohmic Bridge: Listening for OSC on port 11000"
+- In `Settings > Link, Tempo & MIDI`, under the Control Surface dropdown, select **Ohmic_Bridge**. Live should display a message saying "Ohmic Bridge vX.Y.Z: Listening on port 11002"
 
 Activity logs will be output to a `logs` subdirectory. Logging granularity can be controlled with `/live/api/set/log_level` (see [Application API](#application-api) below).
 
 # Usage
 
-AbletonOSC listens for OSC messages on port **11000**, and sends replies on port **11001**. Replies will be sent to the
+Ohmic Bridge listens for OSC messages on port **11002**, and sends replies on port **11003**. (These differ from upstream AbletonOSC's defaults of 11000/11001 so Ohmic Bridge can coexist with an existing AbletonOSC install.) Replies will be sent to the
 same IP as the originating message. When querying properties, OSC wildcard patterns can be used; for example, `/live/clip/get/* 0 0` will query all the properties of track 0, clip 0.
 
 ## Application API
@@ -48,6 +48,7 @@ same IP as the originating message. When querying properties, OSC wildcard patte
 | /live/api/get/log_level       |              | log_level                    | Returns the current log level. Default is `info`.                                        |
 | /live/api/set/log_level       | log_level    |                              | Set the log level, which can be one of: `debug`, `info`, `warning`, `error`, `critical`. |
 | /live/api/show_message        | message      |                              | Show a message in Live's status bar                                                      |
+| /live/api/ohmic/bridge_version |             | major, minor, patch          | Query the Ohmic Bridge version tuple. Used by Ohmic on connect to detect version skew.   |
 
 ### Application status messages
 

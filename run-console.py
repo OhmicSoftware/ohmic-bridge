@@ -339,7 +339,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Console client for AbletonOSC with tab completion. Takes OSC commands and parameters, and prints the return value.")
     parser.add_argument("--hostname", type=str, default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=11000)
+    parser.add_argument("--port", type=int, default=11002)
     parser.add_argument("--verbose", "-v", action="store_true", help="verbose mode: prints all OSC messages")
     args = parser.parse_args()
     main(args)
