@@ -126,17 +126,20 @@ class SongHandler(AbletonOSCHandler):
                 track_names = []
                 track_colors = []
                 midi_tracks = []
+                track_mutes = []
                 for ti, track in enumerate(tracks):
                     try:
                         track_names.append(track.name)
                         c = track.color
                         track_colors.append("#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF))
                         midi_tracks.append(bool(track.has_midi_input))
+                        track_mutes.append(bool(track.mute))
                     except Exception as te:
                         self.logger.error("session_info track %d failed: %s\n%s" % (ti, te, traceback.format_exc()))
                         track_names.append("(error)")
                         track_colors.append("#808080")
                         midi_tracks.append(False)
+                        track_mutes.append(False)
                 scene_names = []
                 for si, scene in enumerate(self.song.scenes):
                     try:
@@ -148,6 +151,7 @@ class SongHandler(AbletonOSCHandler):
                     "track_names": track_names,
                     "track_colors": track_colors,
                     "midi_tracks": midi_tracks,
+                    "track_mutes": track_mutes,
                     "num_scenes": num_scenes,
                     "scene_names": scene_names,
                     "root_note": self.song.root_note,
