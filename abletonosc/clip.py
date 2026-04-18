@@ -1,6 +1,6 @@
 import re
 from typing import Tuple, Callable, Any, Optional
-from .handler import AbletonOSCHandler
+from .handler import AbletonOSCHandler, guarded_lom
 import Live
 
 def note_name_to_midi(name):
@@ -128,6 +128,7 @@ class ClipHandler(AbletonOSCHandler):
             self.osc_server.add_handler("/live/clip/set/%s" % prop,
                                         create_clip_callback(self._set_property, prop))
 
+        @guarded_lom("clip_get_notes")
         def clip_get_notes(clip, params: Tuple[Any] = ()):
             if len(params) == 4:
                 pitch_start, pitch_span, time_start, time_span = params
@@ -147,6 +148,7 @@ class ClipHandler(AbletonOSCHandler):
                 ))
             return tuple(result)
 
+        @guarded_lom("clip_add_notes")
         def clip_add_notes(clip, params: Tuple[Any] = ()):
             # params is a flat tuple: pitch, start, dur, vel, mute, prob, pitch, start, ...
             # Accept both 5-param (legacy Ohmic client wire) and 6-param
@@ -169,6 +171,7 @@ class ClipHandler(AbletonOSCHandler):
             clip.add_new_notes(tuple(specs))
             return None
 
+        @guarded_lom("clip_remove_notes")
         def clip_remove_notes(clip, params: Tuple[Any] = ()):
             if len(params) == 4:
                 pitch_start, pitch_span, time_start, time_span = params
@@ -181,6 +184,7 @@ class ClipHandler(AbletonOSCHandler):
             )
             return None
 
+        @guarded_lom("clip_remove_notes_by_id")
         def clip_remove_notes_by_id(clip, params: Tuple[Any] = ()):
             note_ids = params  # variadic
             clip.remove_notes_by_id(note_ids)
@@ -236,6 +240,7 @@ class ClipHandler(AbletonOSCHandler):
 
             return None
 
+        @guarded_lom("clip_get_envelope")
         def clip_get_envelope(clip, params: Tuple[Any] = ()):
             """Read CC automation envelope by sampling at regular intervals.
 
@@ -288,6 +293,7 @@ class ClipHandler(AbletonOSCHandler):
 
             return tuple(data)
 
+        @guarded_lom("clip_set_envelope")
         def clip_set_envelope(clip, params: Tuple[Any] = ()):
             """Write CC automation envelope to a clip.
 
@@ -334,6 +340,7 @@ class ClipHandler(AbletonOSCHandler):
 
             return (num_points,)
 
+        @guarded_lom("clip_clear_envelope")
         def clip_clear_envelope(clip, params: Tuple[Any] = ()):
             """Clear CC automation envelope from a clip.
 
@@ -380,6 +387,7 @@ class ClipHandler(AbletonOSCHandler):
                     return (track_index, clip_index, *rv)
             return arrangement_clip_callback
 
+        @guarded_lom("arrangement_clip_get_notes")
         def arrangement_clip_get_notes(clip, params: Tuple[Any] = ()):
             if len(params) == 4:
                 pitch_start, pitch_span, time_start, time_span = params
@@ -401,6 +409,7 @@ class ClipHandler(AbletonOSCHandler):
 
         self.osc_server.add_handler("/live/arrangement_clip/get/notes", create_arrangement_clip_callback(arrangement_clip_get_notes))
 
+        @guarded_lom("arrangement_clip_add_notes")
         def arrangement_clip_add_notes(clip, params: Tuple[Any] = ()):
             step = 6 if len(params) >= 6 and len(params) % 6 == 0 else 5
             specs = []
@@ -419,15 +428,12 @@ class ClipHandler(AbletonOSCHandler):
             if not specs:
                 return (0,)
 
-            try:
-                clip.add_new_notes(tuple(specs))
-                return (len(specs),)
-            except Exception as e:
-                self.logger.error("arrangement_clip_add_notes FAILED: %s" % e)
-                return (-1, str(e))
+            clip.add_new_notes(tuple(specs))
+            return (len(specs),)
 
         self.osc_server.add_handler("/live/arrangement_clip/add/notes", create_arrangement_clip_callback(arrangement_clip_add_notes))
 
+        @guarded_lom("arrangement_clip_remove_notes")
         def arrangement_clip_remove_notes(clip, params: Tuple[Any] = ()):
             if len(params) == 4:
                 pitch_start, pitch_span, time_start, time_span = params
@@ -442,6 +448,7 @@ class ClipHandler(AbletonOSCHandler):
 
         self.osc_server.add_handler("/live/arrangement_clip/remove/notes", create_arrangement_clip_callback(arrangement_clip_remove_notes))
 
+        @guarded_lom("arrangement_clip_create")
         def arrangement_clip_create(params: Tuple[Any]) -> Tuple:
             track_index = int(params[0])
             start_time = float(params[1])
@@ -452,6 +459,7 @@ class ClipHandler(AbletonOSCHandler):
 
         self.osc_server.add_handler("/live/arrangement_clip/create", arrangement_clip_create)
 
+        @guarded_lom("arrangement_clip_delete")
         def arrangement_clip_delete(params: Tuple[Any]) -> Tuple:
             track_index = int(params[0])
             clip_index = int(params[1])

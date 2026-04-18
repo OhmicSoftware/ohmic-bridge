@@ -1,5 +1,5 @@
 from typing import Tuple, Any
-from .handler import AbletonOSCHandler
+from .handler import AbletonOSCHandler, guarded_lom
 
 class ClipSlotHandler(AbletonOSCHandler):
     def __init__(self, manager):
@@ -58,6 +58,7 @@ class ClipSlotHandler(AbletonOSCHandler):
             self.osc_server.add_handler("/live/clip_slot/set/%s" % prop,
                                         create_clip_slot_callback(self._set_property, prop))
 
+        @guarded_lom("duplicate_clip_slot")
         def duplicate_clip_slot(clip_slot, args):
             target_track_index, target_clip_index = tuple(args)
             track = self.song.tracks[target_track_index]

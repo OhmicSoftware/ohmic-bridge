@@ -7,7 +7,7 @@ import json
 from functools import partial
 from typing import Tuple, Any
 
-from .handler import AbletonOSCHandler
+from .handler import AbletonOSCHandler, guarded_lom, guarded_lom_json
 
 class SongHandler(AbletonOSCHandler):
     def __init__(self, manager):
@@ -114,125 +114,117 @@ class SongHandler(AbletonOSCHandler):
         #--------------------------------------------------------------------------------
         # Bulk endpoints for session grid (optimized — fewer OSC round-trips)
         #--------------------------------------------------------------------------------
+        @guarded_lom_json("session_info")
+        @guarded_lom_json("session_info")
         def session_info(_):
             """Return track metadata + song scale in one call.
 
             Response: JSON string with track_names, track_colors, midi_tracks,
             num_scenes, root_note, scale_name, tempo, is_playing.
             """
-            try:
-                tracks = self.song.tracks
-                num_scenes = len(self.song.scenes)
-                track_names = []
-                track_colors = []
-                midi_tracks = []
-                track_mutes = []
-                playing_slots = []
-                for ti, track in enumerate(tracks):
-                    try:
-                        track_names.append(track.name)
-                        c = track.color
-                        track_colors.append("#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF))
-                        midi_tracks.append(bool(track.has_midi_input))
-                        track_mutes.append(bool(track.mute))
-                        playing_slots.append(int(track.playing_slot_index))
-                    except Exception as te:
-                        self.logger.error("session_info track %d failed: %s\n%s" % (ti, te, traceback.format_exc()))
-                        track_names.append("(error)")
-                        track_colors.append("#808080")
-                        midi_tracks.append(False)
-                        track_mutes.append(False)
-                        playing_slots.append(-1)
-                scene_names = []
-                for si, scene in enumerate(self.song.scenes):
-                    try:
-                        scene_names.append(scene.name)
-                    except Exception as se:
-                        self.logger.error("session_info scene %d failed: %s" % (si, se))
-                        scene_names.append("")
-                data = {
-                    "track_names": track_names,
-                    "track_colors": track_colors,
-                    "midi_tracks": midi_tracks,
-                    "track_mutes": track_mutes,
-                    "playing_slots": playing_slots,
-                    "num_scenes": num_scenes,
-                    "scene_names": scene_names,
-                    "root_note": self.song.root_note,
-                    "scale_name": self.song.scale_name,
-                    "tempo": self.song.tempo,
-                    "is_playing": bool(self.song.is_playing),
-                }
-                result = json.dumps(data)
-                self.logger.debug("session_info: %d tracks, %d scenes, %d bytes" % (len(track_names), num_scenes, len(result)))
-                return (result,)
-            except Exception as e:
-                self.logger.error("session_info FAILED: %s\n%s" % (e, traceback.format_exc()))
-                return (json.dumps({"error": str(e)}),)
+            tracks = self.song.tracks
+            num_scenes = len(self.song.scenes)
+            track_names = []
+            track_colors = []
+            midi_tracks = []
+            track_mutes = []
+            playing_slots = []
+            for ti, track in enumerate(tracks):
+                try:
+                    track_names.append(track.name)
+                    c = track.color
+                    track_colors.append("#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF))
+                    midi_tracks.append(bool(track.has_midi_input))
+                    track_mutes.append(bool(track.mute))
+                    playing_slots.append(int(track.playing_slot_index))
+                except Exception as te:
+                    self.logger.error("session_info track %d failed: %s\n%s" % (ti, te, traceback.format_exc()))
+                    track_names.append("(error)")
+                    track_colors.append("#808080")
+                    midi_tracks.append(False)
+                    track_mutes.append(False)
+                    playing_slots.append(-1)
+            scene_names = []
+            for si, scene in enumerate(self.song.scenes):
+                try:
+                    scene_names.append(scene.name)
+                except Exception as se:
+                    self.logger.error("session_info scene %d failed: %s" % (si, se))
+                    scene_names.append("")
+            data = {
+                "track_names": track_names,
+                "track_colors": track_colors,
+                "midi_tracks": midi_tracks,
+                "track_mutes": track_mutes,
+                "playing_slots": playing_slots,
+                "num_scenes": num_scenes,
+                "scene_names": scene_names,
+                "root_note": self.song.root_note,
+                "scale_name": self.song.scale_name,
+                "tempo": self.song.tempo,
+                "is_playing": bool(self.song.is_playing),
+            }
+            result = json.dumps(data)
+            self.logger.debug("session_info: %d tracks, %d scenes, %d bytes" % (len(track_names), num_scenes, len(result)))
+            return (result,)
         self.osc_server.add_handler("/live/song/get/session_info", session_info)
 
+        @guarded_lom_json("playing_positions")
         def playing_positions(_):
             """Return playing clip positions and tempo — lightweight sync endpoint."""
-            try:
-                tracks = self.song.tracks
-                positions = {}
-                for ti, track in enumerate(tracks):
-                    try:
-                        psi = int(track.playing_slot_index)
-                        if psi < 0:
-                            continue
-                        clip_slots = track.clip_slots
-                        if psi < len(clip_slots):
-                            clip = clip_slots[psi].clip
-                            if clip is not None:
-                                positions["%d,%d" % (ti, psi)] = clip.playing_position
-                    except Exception:
-                        pass
-                data = json.dumps({
-                    "playing_positions": positions,
-                    "tempo": self.song.tempo,
-                    "is_playing": bool(self.song.is_playing),
-                })
-                return (data,)
-            except Exception as e:
-                self.logger.error("playing_positions FAILED: %s\n%s" % (e, traceback.format_exc()))
-                return (json.dumps({"error": str(e)}),)
+            tracks = self.song.tracks
+            positions = {}
+            for ti, track in enumerate(tracks):
+                try:
+                    psi = int(track.playing_slot_index)
+                    if psi < 0:
+                        continue
+                    clip_slots = track.clip_slots
+                    if psi < len(clip_slots):
+                        clip = clip_slots[psi].clip
+                        if clip is not None:
+                            positions["%d,%d" % (ti, psi)] = clip.playing_position
+                except Exception:
+                    pass
+            data = json.dumps({
+                "playing_positions": positions,
+                "tempo": self.song.tempo,
+                "is_playing": bool(self.song.is_playing),
+            })
+            return (data,)
         self.osc_server.add_handler("/live/song/get/playing_positions", playing_positions)
 
+        @guarded_lom_json("clip_grid")
         def clip_grid(_):
             """Return occupied clip slots with names and colors in one call.
 
             Response: JSON string with clips dict and clip_colors dict,
             keyed by "track_idx,slot_idx".
             """
-            try:
-                tracks = self.song.tracks
-                num_scenes = len(self.song.scenes)
-                clips = {}
-                clip_colors = {}
-                for track_idx, track in enumerate(tracks):
-                    for slot_idx, clip_slot in enumerate(track.clip_slots):
-                        if slot_idx >= num_scenes:
-                            break
-                        try:
-                            if clip_slot.clip is not None:
-                                key = "%d,%d" % (track_idx, slot_idx)
-                                name = clip_slot.clip.name
-                                clips[key] = name if name else "(unnamed)"
-                                c = clip_slot.clip.color
-                                clip_colors[key] = "#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
-                        except Exception as ce:
-                            self.logger.error("clip_grid slot [%d,%d] failed: %s" % (track_idx, slot_idx, ce))
-                data = {
-                    "clips": clips,
-                    "clip_colors": clip_colors,
-                }
-                result = json.dumps(data)
-                self.logger.debug("clip_grid: %d clips, %d bytes" % (len(clips), len(result)))
-                return (result,)
-            except Exception as e:
-                self.logger.error("clip_grid FAILED: %s\n%s" % (e, traceback.format_exc()))
-                return (json.dumps({"error": str(e)}),)
+            tracks = self.song.tracks
+            num_scenes = len(self.song.scenes)
+            clips = {}
+            clip_colors = {}
+            for track_idx, track in enumerate(tracks):
+                for slot_idx, clip_slot in enumerate(track.clip_slots):
+                    if slot_idx >= num_scenes:
+                        break
+                    try:
+                        if clip_slot.clip is not None:
+                            key = "%d,%d" % (track_idx, slot_idx)
+                            name = clip_slot.clip.name
+                            clips[key] = name if name else "(unnamed)"
+                            c = clip_slot.clip.color
+                            clip_colors[key] = "#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
+                    except Exception as ce:
+                        self.logger.error("clip_grid slot [%d,%d] failed: %s" % (track_idx, slot_idx, ce))
+            data = {
+                "clips": clips,
+                "clip_colors": clip_colors,
+            }
+            result = json.dumps(data)
+            self.logger.debug("clip_grid: %d clips, %d bytes" % (len(clips), len(result)))
+            return (result,)
         self.osc_server.add_handler("/live/song/get/clip_grid", clip_grid)
 
         def song_get_track_data(params):
@@ -365,12 +357,14 @@ class SongHandler(AbletonOSCHandler):
         #--------------------------------------------------------------------------------
         # Callbacks for Song: Cue point properties
         #--------------------------------------------------------------------------------
+        @guarded_lom("song_get_cue_points")
         def song_get_cue_points(song, _):
             cue_points = song.cue_points
             cue_point_pairs = [(cue_point.name, cue_point.time) for cue_point in cue_points]
             return tuple(element for pair in cue_point_pairs for element in pair)
         self.osc_server.add_handler("/live/song/get/cue_points", partial(song_get_cue_points, self.song))
 
+        @guarded_lom("song_jump_to_cue_point")
         def song_jump_to_cue_point(song, params: Tuple[Any] = ()):
             cue_point_index = params[0]
             if isinstance(cue_point_index, str):
@@ -383,6 +377,7 @@ class SongHandler(AbletonOSCHandler):
         self.osc_server.add_handler("/live/song/cue_point/jump", partial(song_jump_to_cue_point, self.song))
 
         self.osc_server.add_handler("/live/song/cue_point/add_or_delete", partial(self._call_method, self.song, "set_or_delete_cue"))
+        @guarded_lom("song_cue_point_set_name")
         def song_cue_point_set_name(song, params: Tuple[Any] = ()):
             cue_point_index = params[0]
             new_name = params[1]
@@ -395,6 +390,7 @@ class SongHandler(AbletonOSCHandler):
         #--------------------------------------------------------------------------------
         self.last_song_time = -1.0
         
+        @guarded_lom("stop_beat_listener")
         def stop_beat_listener(params: Tuple[Any] = ()):
             try:
                 self.song.remove_current_song_time_listener(self.current_song_time_changed)
@@ -402,6 +398,7 @@ class SongHandler(AbletonOSCHandler):
             except:
                 pass
 
+        @guarded_lom("start_beat_listener")
         def start_beat_listener(params: Tuple[Any] = ()):
             stop_beat_listener()
             self.logger.info("Adding beat listener")

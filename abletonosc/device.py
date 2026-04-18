@@ -1,5 +1,5 @@
 from typing import Tuple, Any
-from .handler import AbletonOSCHandler
+from .handler import AbletonOSCHandler, guarded_lom
 
 class DeviceHandler(AbletonOSCHandler):
     def __init__(self, manager):
@@ -90,10 +90,12 @@ class DeviceHandler(AbletonOSCHandler):
             return param_index, device.parameters[param_index].value
         
         # Uses str_for_value method to return the UI-friendly version of a parameter value (ex: "2500 Hz")
+        @guarded_lom("device_get_parameter_value_string")
         def device_get_parameter_value_string(device, params: Tuple[Any] = ()):
             param_index = int(params[0])
             return param_index, device.parameters[param_index].str_for_value(device.parameters[param_index].value)
-        
+
+        @guarded_lom("device_get_parameter_value_listener")
         def device_get_parameter_value_listener(device, params: Tuple[Any] = ()):
 
             def property_changed_callback():
@@ -115,6 +117,7 @@ class DeviceHandler(AbletonOSCHandler):
 
             property_changed_callback()
 
+        @guarded_lom("device_get_parameter_remove_value_listener")
         def device_get_parameter_remove_value_listener(device, params: Tuple[Any] = ()):
             listener_key = ('device_parameter_value', tuple(params))
             if listener_key in self.listener_functions:

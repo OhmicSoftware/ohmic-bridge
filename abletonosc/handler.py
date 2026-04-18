@@ -26,11 +26,19 @@ class AbletonOSCHandler(Component):
     #--------------------------------------------------------------------------------
     def _call_method(self, target, method, params: Optional[Tuple] = ()):
         self.logger.info("Calling method for %s: %s (params %s)" % (self.class_identifier, method, str(params)))
-        getattr(target, method)(*params)
+        try:
+            getattr(target, method)(*params)
+        except Exception as e:
+            self.logger.exception("%s.%s failed", self.class_identifier, method)
+            return ("error: " + type(e).__name__ + ": " + str(e),)
 
     def _set_property(self, target, prop, params: Tuple) -> None:
         self.logger.info("Setting property for %s: %s (new value %s)" % (self.class_identifier, prop, params[0]))
-        setattr(target, prop, params[0])
+        try:
+            setattr(target, prop, params[0])
+        except Exception as e:
+            self.logger.exception("set %s.%s failed", self.class_identifier, prop)
+            return ("error: " + type(e).__name__ + ": " + str(e),)
 
     def _get_property(self, target, prop, params: Optional[Tuple] = ()) -> Tuple[Any]:
         try:
@@ -41,6 +49,15 @@ class AbletonOSCHandler(Component):
             # to a particular object (e.g. track.fold_state for a non-group track)
             #--------------------------------------------------------------------------------
             value = None
+        except Exception as e:
+            #--------------------------------------------------------------------------------
+            # Undocumented-property access can raise AttributeError if Ableton
+            # renames or removes the property in a future release. Return an
+            # OSC error reply rather than propagating so the Remote Script
+            # survives the call.
+            #--------------------------------------------------------------------------------
+            self.logger.exception("get %s.%s failed", self.class_identifier, prop)
+            return ("error: " + type(e).__name__ + ": " + str(e),)
         self.logger.info("Getting property for %s: %s = %s" % (self.class_identifier, prop, value))
         return (value, *params)
 
@@ -114,3 +131,60 @@ class AbletonOSCHandler(Component):
             target = self.listener_objects[listener_key]
             prop, params = listener_key
             self._stop_listen(target, prop, params)
+
+
+# ---------------------------------------------------------------------------
+# Exception-wrapping decorators for undocumented LOM callbacks.
+#
+# Every handler that calls into Ableton's undocumented Live Object Model
+# (get_notes_extended, root_note, cue_points, etc.) should be wrapped so
+# an unexpected API change — a removed method, a signature drift, a new
+# required argument — is caught and returned to Ohmic as an OSC error
+# reply instead of propagating through Ableton's Python interpreter and
+# crashing the Remote Script. Capability probing (see
+# abletonosc/capabilities.py) catches PRESENCE changes; these decorators
+# catch every other class of failure at call time.
+#
+# Wire format on error:
+#   guarded_lom        -> ("error: <ClassName>: <message>",)
+#   guarded_lom_json   -> (json.dumps({"error": ..., "handler": ...}),)
+# ---------------------------------------------------------------------------
+import json as _json
+from functools import wraps as _wraps
+
+_decorator_logger = logging.getLogger("abletonosc")
+
+
+def guarded_lom(handler_name):
+    """Wrap a tuple-returning OSC handler callback so unexpected
+    exceptions are caught, logged, and reported to Ohmic."""
+    def decorator(fn):
+        @_wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as e:
+                _decorator_logger.exception("%s failed", handler_name)
+                return ("error: " + type(e).__name__ + ": " + str(e),)
+        return wrapper
+    return decorator
+
+
+def guarded_lom_json(handler_name):
+    """Wrap a JSON-returning OSC handler callback. Error path returns
+    a JSON string with 'error' and 'handler' keys so callers that
+    already json.loads() the success path can surface the error with
+    the same parse."""
+    def decorator(fn):
+        @_wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as e:
+                _decorator_logger.exception("%s failed", handler_name)
+                return (_json.dumps({
+                    "error": type(e).__name__ + ": " + str(e),
+                    "handler": handler_name,
+                }),)
+        return wrapper
+    return decorator

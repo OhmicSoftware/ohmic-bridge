@@ -1,7 +1,7 @@
 import Live
 import logging
 from typing import Tuple, Optional
-from .handler import AbletonOSCHandler
+from .handler import AbletonOSCHandler, guarded_lom
 
 logger = logging.getLogger("abletonosc")
 
@@ -173,6 +173,7 @@ class BrowserHandler(AbletonOSCHandler):
         # ------------------------------------------------------------------
         # /live/browser/get/capabilities
         # ------------------------------------------------------------------
+        @guarded_lom("browser_get_capabilities")
         def get_capabilities(params):
             logger.info("browser/get/capabilities called")
             browser = self._get_browser()
@@ -192,6 +193,7 @@ class BrowserHandler(AbletonOSCHandler):
         # ------------------------------------------------------------------
         # /live/browser/get/names  (category_str)
         # ------------------------------------------------------------------
+        @guarded_lom("browser_get_names")
         def get_names(params):
             if not params or len(params) < 1:
                 return ("error: category parameter required",)
@@ -234,6 +236,7 @@ class BrowserHandler(AbletonOSCHandler):
         # ------------------------------------------------------------------
         # /live/browser/load  (track_index, category_str, item_name_or_path)
         # ------------------------------------------------------------------
+        @guarded_lom("browser_load_item")
         def load_item(params):
             if not params or len(params) < 3:
                 return ("error: requires track_index, category, item_name_or_path",)
@@ -330,6 +333,7 @@ class BrowserHandler(AbletonOSCHandler):
         # ------------------------------------------------------------------
         # /live/browser/search  (category_str, query_str)
         # ------------------------------------------------------------------
+        @guarded_lom("browser_search_items")
         def search_items(params):
             if not params or len(params) < 2:
                 return ("error: requires category and query",)

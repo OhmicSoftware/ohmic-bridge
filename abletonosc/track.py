@@ -1,5 +1,5 @@
 from typing import Tuple, Any, Callable, Optional
-from .handler import AbletonOSCHandler
+from .handler import AbletonOSCHandler, guarded_lom
 
 
 class TrackHandler(AbletonOSCHandler):
@@ -117,12 +117,15 @@ class TrackHandler(AbletonOSCHandler):
         def track_get_clip_colors(track, _):
             return tuple(clip_slot.clip.color if clip_slot.clip else None for clip_slot in track.clip_slots)
 
+        @guarded_lom("track_get_arrangement_clip_names")
         def track_get_arrangement_clip_names(track, _):
             return tuple(clip.name for clip in track.arrangement_clips)
 
+        @guarded_lom("track_get_arrangement_clip_lengths")
         def track_get_arrangement_clip_lengths(track, _):
             return tuple(clip.length for clip in track.arrangement_clips)
 
+        @guarded_lom("track_get_arrangement_clip_start_times")
         def track_get_arrangement_clip_start_times(track, _):
             return tuple(clip.start_time for clip in track.arrangement_clips)
 
