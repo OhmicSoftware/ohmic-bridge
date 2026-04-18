@@ -69,6 +69,12 @@ def test_guarded_lom_catches_exception_and_returns_error_tuple():
 
 
 def test_guarded_lom_logs_full_traceback(caplog):
+    """The decorator writes a manually-formatted traceback into the
+    log message (not exc_info) because Ableton's embedded Python
+    logger raises ValueError: substring not found when
+    logger.exception is called inside an except block. Logged-record
+    content must still include the handler name, the exception class,
+    and a readable traceback string."""
     handler = _load_handler_module()
 
     @handler.guarded_lom("log_me")
@@ -79,11 +85,18 @@ def test_guarded_lom_logs_full_traceback(caplog):
         raises()
 
     error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
-    assert any("log_me" in r.getMessage() for r in error_records), (
-        "expected at least one ERROR-level log record mentioning the handler name"
+    combined = "\n".join(r.getMessage() for r in error_records)
+    assert "log_me" in combined, (
+        "expected an ERROR-level log record mentioning the handler name"
     )
-    assert any(r.exc_info is not None for r in error_records), (
-        "expected at least one record to carry exc_info (full traceback)"
+    assert "RuntimeError" in combined, (
+        "expected the exception class in the log message"
+    )
+    assert "observe me" in combined, (
+        "expected the exception message in the log message"
+    )
+    assert "Traceback" in combined, (
+        "expected a manually-formatted traceback in the log message"
     )
 
 

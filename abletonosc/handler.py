@@ -25,20 +25,23 @@ class AbletonOSCHandler(Component):
     # Generic callbacks
     #--------------------------------------------------------------------------------
     def _call_method(self, target, method, params: Optional[Tuple] = ()):
+        #--------------------------------------------------------------------------------
+        # Exceptions raised here are caught by osc_server.py's process_message
+        # outer handler and surfaced to the OSC client as an error. Do NOT add
+        # a try/except inside this method — the Live-embedded Python's logger
+        # raises `ValueError: substring not found` on self.logger.exception(...)
+        # inside an except block, turning any genuine API error into a cryptic
+        # substring error that masks the real cause. (Confirmed against
+        # Live 12.3.5, April 2026.)
+        #--------------------------------------------------------------------------------
         self.logger.info("Calling method for %s: %s (params %s)" % (self.class_identifier, method, str(params)))
-        try:
-            getattr(target, method)(*params)
-        except Exception as e:
-            self.logger.exception("%s.%s failed", self.class_identifier, method)
-            return ("error: " + type(e).__name__ + ": " + str(e),)
+        getattr(target, method)(*params)
 
     def _set_property(self, target, prop, params: Tuple) -> None:
+        # Same logger caveat as _call_method — let exceptions propagate to
+        # osc_server's outer handler rather than wrapping here.
         self.logger.info("Setting property for %s: %s (new value %s)" % (self.class_identifier, prop, params[0]))
-        try:
-            setattr(target, prop, params[0])
-        except Exception as e:
-            self.logger.exception("set %s.%s failed", self.class_identifier, prop)
-            return ("error: " + type(e).__name__ + ": " + str(e),)
+        setattr(target, prop, params[0])
 
     def _get_property(self, target, prop, params: Optional[Tuple] = ()) -> Tuple[Any]:
         try:
@@ -49,15 +52,17 @@ class AbletonOSCHandler(Component):
             # to a particular object (e.g. track.fold_state for a non-group track)
             #--------------------------------------------------------------------------------
             value = None
-        except Exception as e:
+        except AttributeError:
             #--------------------------------------------------------------------------------
             # Undocumented-property access can raise AttributeError if Ableton
-            # renames or removes the property in a future release. Return an
-            # OSC error reply rather than propagating so the Remote Script
-            # survives the call.
+            # renames or removes the property in a future release. Return None
+            # as if the property were not applicable — matches the existing
+            # RuntimeError behavior and keeps the Remote Script alive instead
+            # of letting the AttributeError propagate. Do NOT call
+            # self.logger.exception() here — see _call_method's note on the
+            # embedded-Python logger quirk.
             #--------------------------------------------------------------------------------
-            self.logger.exception("get %s.%s failed", self.class_identifier, prop)
-            return ("error: " + type(e).__name__ + ": " + str(e),)
+            value = None
         self.logger.info("Getting property for %s: %s = %s" % (self.class_identifier, prop, value))
         return (value, *params)
 
@@ -150,6 +155,7 @@ class AbletonOSCHandler(Component):
 #   guarded_lom_json   -> (json.dumps({"error": ..., "handler": ...}),)
 # ---------------------------------------------------------------------------
 import json as _json
+import traceback as _traceback
 from functools import wraps as _wraps
 
 _decorator_logger = logging.getLogger("abletonosc")
@@ -157,14 +163,29 @@ _decorator_logger = logging.getLogger("abletonosc")
 
 def guarded_lom(handler_name):
     """Wrap a tuple-returning OSC handler callback so unexpected
-    exceptions are caught, logged, and reported to Ohmic."""
+    exceptions are caught, logged, and reported to Ohmic.
+
+    NOTE: Ableton's embedded Python logger raises ``ValueError:
+    substring not found`` when ``logger.exception(...)`` is called
+    inside an except block, masking the real exception. We log at
+    ERROR level without auto-traceback and format the traceback
+    manually instead, so the log still captures enough context to
+    diagnose a broken LOM API without tripping the embedded-logger
+    bug. (Confirmed against Live 12.3.5, April 2026.)"""
     def decorator(fn):
         @_wraps(fn)
         def wrapper(*args, **kwargs):
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
-                _decorator_logger.exception("%s failed", handler_name)
+                try:
+                    tb = _traceback.format_exc()
+                except Exception:
+                    tb = "(traceback unavailable)"
+                _decorator_logger.error(
+                    "%s failed: %s: %s\n%s",
+                    handler_name, type(e).__name__, str(e), tb,
+                )
                 return ("error: " + type(e).__name__ + ": " + str(e),)
         return wrapper
     return decorator
@@ -174,14 +195,22 @@ def guarded_lom_json(handler_name):
     """Wrap a JSON-returning OSC handler callback. Error path returns
     a JSON string with 'error' and 'handler' keys so callers that
     already json.loads() the success path can surface the error with
-    the same parse."""
+    the same parse. Uses the same manual-traceback pattern as
+    guarded_lom (see note there)."""
     def decorator(fn):
         @_wraps(fn)
         def wrapper(*args, **kwargs):
             try:
                 return fn(*args, **kwargs)
             except Exception as e:
-                _decorator_logger.exception("%s failed", handler_name)
+                try:
+                    tb = _traceback.format_exc()
+                except Exception:
+                    tb = "(traceback unavailable)"
+                _decorator_logger.error(
+                    "%s failed: %s: %s\n%s",
+                    handler_name, type(e).__name__, str(e), tb,
+                )
                 return (_json.dumps({
                     "error": type(e).__name__ + ": " + str(e),
                     "handler": handler_name,

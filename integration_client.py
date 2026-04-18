@@ -52,8 +52,26 @@ class AbletonOSCClient:
     def send_message(self, address: str, params=None):
         self.client.send_message(address, params or [])
 
+    def drain(self):
+        """Discard any pending datagrams on the listen socket. Used
+        before each query so replies from prior fire-and-forget sends
+        (for example an ``("error: ...",)`` tuple returned by a
+        ``set_*`` handler that raised) cannot satisfy the new query —
+        UDP has no per-request affinity and without this drain the
+        stale reply reaches the caller instead."""
+        self.listen_socket.settimeout(0.0)
+        try:
+            while True:
+                self.listen_socket.recvfrom(65535)
+        except (BlockingIOError, socket.timeout, OSError):
+            pass
+        self.listen_socket.settimeout(2.0)
+
     def query(self, address: str, params=None, timeout: float = 2.0):
-        """Send a message and wait for the matching reply."""
+        """Send a message and wait for the matching reply. Drains the
+        listen socket first so stale replies from prior sends cannot
+        satisfy this query."""
+        self.drain()
         self.send_message(address, params)
         self.listen_socket.settimeout(timeout)
         try:
