@@ -6,20 +6,25 @@ pytestmark = pytest.mark.integration
 
 def test_browser_capabilities_returnable(osc):
     """browser/get/capabilities returns a flat tuple of supported
-    category names (instruments, audio_effects, midi_effects,
-    plugins, user_library, presets). The exact set depends on the
-    Live version. A UDP reply may also carry leading indicators (for
-    example an echoed request counter) so we just assert the reply
-    contains at least one recognizable category name string."""
+    category names. The handler source (abletonosc/browser.py)
+    returns ``tuple(supported)`` where supported is a list of strings
+    drawn from CATEGORY_MAP keys, or ``("unsupported",)`` when the
+    browser subsystem is absent. Assert every element is one of the
+    known strings — no mixed types, no trailing integers."""
     reply = osc.query("/live/browser/get/capabilities", [])
-    known = {
+    allowed = {
         "instruments", "audio_effects", "midi_effects",
         "plugins", "user_library", "presets", "unsupported",
     }
-    string_parts = [p for p in reply if isinstance(p, str)]
-    assert any(p in known for p in string_parts), (
-        "reply did not contain any known browser category name: %r" % (reply,)
-    )
+    assert len(reply) >= 1, "capabilities reply was empty"
+    for category in reply:
+        assert isinstance(category, str), (
+            "every element must be a string; got %r in %r" % (category, reply)
+        )
+        assert category in allowed, (
+            "unknown category %r in %r — update the allow-list if the "
+            "Bridge added a new category" % (category, reply)
+        )
 
 
 def test_browser_get_names_for_instruments(osc):
