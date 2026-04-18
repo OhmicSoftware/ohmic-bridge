@@ -68,21 +68,36 @@ class AbletonOSCClient:
         self.listen_socket.settimeout(2.0)
 
     def query(self, address: str, params=None, timeout: float = 2.0):
-        """Send a message and wait for the matching reply. Drains the
-        listen socket first so stale replies from prior sends cannot
-        satisfy this query."""
+        """Send a message and wait for a reply with a matching OSC
+        address. Drains the listen socket first, but because the
+        Bridge may queue echoes from prior fire-and-forget sends
+        that arrive after the drain, we also keep reading until we
+        see a reply whose address equals the one we sent — anything
+        else is a leftover from a prior operation and is discarded."""
         self.drain()
         self.send_message(address, params)
-        self.listen_socket.settimeout(timeout)
-        try:
-            data, _ = self.listen_socket.recvfrom(65535)
-        except socket.timeout:
-            raise BridgeNotResponding(
-                "No response from Ableton on port %d within %ss. Is "
-                "Ableton running with Ohmic Bridge loaded as a Remote "
-                "Script? (Settings -> Link, Tempo & MIDI -> select "
-                "Ohmic_Bridge)" % (OSC_LISTEN_PORT, timeout)
-            )
-        packet = osc_packet.OscPacket(data)
-        msg = packet.messages[0].message
-        return tuple(msg.params)
+        import time as _time
+        deadline = _time.monotonic() + timeout
+        while True:
+            remaining = deadline - _time.monotonic()
+            if remaining <= 0:
+                raise BridgeNotResponding(
+                    "No response at address %s on port %d within %ss. "
+                    "Is Ableton running with Ohmic Bridge loaded as a "
+                    "Remote Script? (Settings -> Link, Tempo & MIDI -> "
+                    "select Ohmic_Bridge)" % (address, OSC_LISTEN_PORT, timeout)
+                )
+            self.listen_socket.settimeout(remaining)
+            try:
+                data, _ = self.listen_socket.recvfrom(65535)
+            except socket.timeout:
+                raise BridgeNotResponding(
+                    "No response at address %s on port %d within %ss. "
+                    "Is Ableton running with Ohmic Bridge loaded as a "
+                    "Remote Script?" % (address, OSC_LISTEN_PORT, timeout)
+                )
+            packet = osc_packet.OscPacket(data)
+            msg = packet.messages[0].message
+            if msg.address == address:
+                return tuple(msg.params)
+            # Leftover reply from a prior send — discard and keep reading.
