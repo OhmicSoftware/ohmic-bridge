@@ -44,7 +44,10 @@ class AbletonOSCClient:
         self.client = SimpleUDPClient(hostname, send_port)
         self.listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.listen_socket.bind(("0.0.0.0", listen_port))
-        self.listen_socket.settimeout(2.0)
+        # 5s default accommodates Live operations that cross a tick
+        # boundary (browser loads, device creation, scene firing) which
+        # can take noticeably longer than a simple get/set.
+        self.listen_socket.settimeout(5.0)
 
     def stop(self):
         self.listen_socket.close()
@@ -65,9 +68,9 @@ class AbletonOSCClient:
                 self.listen_socket.recvfrom(65535)
         except (BlockingIOError, socket.timeout, OSError):
             pass
-        self.listen_socket.settimeout(2.0)
+        self.listen_socket.settimeout(5.0)
 
-    def query(self, address: str, params=None, timeout: float = 2.0):
+    def query(self, address: str, params=None, timeout: float = 5.0):
         """Send a message and wait for a reply with a matching OSC
         address. Drains the listen socket first, but because the
         Bridge may queue echoes from prior fire-and-forget sends
