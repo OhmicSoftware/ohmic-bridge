@@ -1,3 +1,5 @@
+import json
+
 from . import client, wait_one_tick, TICK_DURATION
 
 #--------------------------------------------------------------------------------
@@ -197,3 +199,24 @@ def test_song_undo_redo(client):
     wait_one_tick()
     assert client.query("/live/song/get/num_scenes") == (9,)
     client.send_message("/live/song/delete_scene", [8])
+
+#--------------------------------------------------------------------------------
+# Test session_info bulk endpoint
+#--------------------------------------------------------------------------------
+
+def test_session_info_contains_is_playing(client):
+    """session_info must include is_playing so Ohmic can detect external stop."""
+    client.send_message("/live/song/stop_playing")
+    wait_one_tick()
+    result = client.query("/live/song/get/session_info")
+    data = json.loads(result[0])
+    assert "is_playing" in data
+    assert data["is_playing"] is False
+
+    client.send_message("/live/song/start_playing")
+    wait_one_tick()
+    result = client.query("/live/song/get/session_info")
+    data = json.loads(result[0])
+    assert data["is_playing"] is True
+    client.send_message("/live/song/stop_playing")
+    wait_one_tick()

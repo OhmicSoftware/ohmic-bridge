@@ -66,8 +66,7 @@ class ClipHandler(AbletonOSCHandler):
         methods = [
             "fire",
             "stop",
-            "duplicate_loop", 
-            "remove_notes_by_id"
+            "duplicate_loop",
         ]
         properties_r = [
             "end_time",
@@ -136,29 +135,39 @@ class ClipHandler(AbletonOSCHandler):
                 pitch_start, pitch_span, time_start, time_span = 0, 127, -8192, 16384
             else:
                 raise ValueError("Invalid number of arguments for /clip/get/notes. Either 0 or 4 arguments must be passed.")
-            notes = clip.get_notes_extended(pitch_start, pitch_span, time_start, time_span)
-            all_note_attributes = []
+            notes = clip.get_notes_extended(
+                pitch_start, pitch_span, time_start, time_span
+            )
+            result = []
             for note in notes:
-                probability = note.probability if hasattr(note, 'probability') else 1.0
-                all_note_attributes += [note.pitch, note.start_time, note.duration, note.velocity, note.mute, probability]
-            return tuple(all_note_attributes)
+                probability = getattr(note, "probability", 1.0)
+                result.extend((
+                    note.pitch, note.start_time, note.duration,
+                    note.velocity, note.mute, probability,
+                ))
+            return tuple(result)
 
         def clip_add_notes(clip, params: Tuple[Any] = ()):
-            notes = []
-            # Support both 5-param (legacy) and 6-param (with probability) formats
+            # params is a flat tuple: pitch, start, dur, vel, mute, prob, pitch, start, ...
+            # Accept both 5-param (legacy Ohmic client wire) and 6-param
+            # (current wire with probability) inputs. The 5-param form is
+            # retained so older Ohmic builds can still drive this Bridge.
             step = 6 if len(params) >= 6 and len(params) % 6 == 0 else 5
+            specs = []
             for offset in range(0, len(params), step):
                 chunk = params[offset:offset + step]
-                pitch, start_time, duration, velocity, mute = chunk[0], chunk[1], chunk[2], chunk[3], chunk[4]
+                pitch, start_time, duration, velocity, mute = (
+                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4],
+                )
                 probability = float(chunk[5]) if step == 6 else 1.0
-                note = Live.Clip.MidiNoteSpecification(start_time=start_time,
-                                                       duration=duration,
-                                                       pitch=pitch,
-                                                       velocity=velocity,
-                                                       mute=mute,
-                                                       probability=probability)
-                notes.append(note)
-            clip.add_new_notes(tuple(notes))
+                specs.append(Live.Clip.MidiNoteSpecification(
+                    pitch=pitch, start_time=start_time, duration=duration,
+                    velocity=velocity, mute=mute, probability=probability,
+                ))
+            if not specs:
+                return None
+            clip.add_new_notes(tuple(specs))
+            return None
 
         def clip_remove_notes(clip, params: Tuple[Any] = ()):
             if len(params) == 4:
@@ -167,11 +176,20 @@ class ClipHandler(AbletonOSCHandler):
                 pitch_start, pitch_span, time_start, time_span = 0, 127, -8192, 16384
             else:
                 raise ValueError("Invalid number of arguments for /clip/remove/notes. Either 0 or 4 arguments must be passed.")
-            clip.remove_notes_extended(pitch_start, pitch_span, time_start, time_span)
+            clip.remove_notes_extended(
+                pitch_start, pitch_span, time_start, time_span
+            )
+            return None
+
+        def clip_remove_notes_by_id(clip, params: Tuple[Any] = ()):
+            note_ids = params  # variadic
+            clip.remove_notes_by_id(note_ids)
+            return None
 
         self.osc_server.add_handler("/live/clip/get/notes", create_clip_callback(clip_get_notes))
         self.osc_server.add_handler("/live/clip/add/notes", create_clip_callback(clip_add_notes))
         self.osc_server.add_handler("/live/clip/remove/notes", create_clip_callback(clip_remove_notes))
+        self.osc_server.add_handler("/live/clip/remove_notes_by_id", create_clip_callback(clip_remove_notes_by_id))
 
         # -------------------------------------------------------------------
         # MIDI CC envelope endpoints
@@ -369,32 +387,41 @@ class ClipHandler(AbletonOSCHandler):
                 pitch_start, pitch_span, time_start, time_span = 0, 127, -8192, 16384
             else:
                 raise ValueError("Invalid number of arguments for /arrangement_clip/get/notes. Either 0 or 4 arguments must be passed.")
-            notes = clip.get_notes_extended(pitch_start, pitch_span, time_start, time_span)
-            all_note_attributes = []
+            notes = clip.get_notes_extended(
+                pitch_start, pitch_span, time_start, time_span
+            )
+            result = []
             for note in notes:
-                probability = note.probability if hasattr(note, 'probability') else 1.0
-                all_note_attributes += [note.pitch, note.start_time, note.duration, note.velocity, note.mute, probability]
-            return tuple(all_note_attributes)
+                probability = getattr(note, "probability", 1.0)
+                result.extend((
+                    note.pitch, note.start_time, note.duration,
+                    note.velocity, note.mute, probability,
+                ))
+            return tuple(result)
 
         self.osc_server.add_handler("/live/arrangement_clip/get/notes", create_arrangement_clip_callback(arrangement_clip_get_notes))
 
         def arrangement_clip_add_notes(clip, params: Tuple[Any] = ()):
-            notes = []
             step = 6 if len(params) >= 6 and len(params) % 6 == 0 else 5
+            specs = []
             for offset in range(0, len(params), step):
                 chunk = params[offset:offset + step]
-                pitch, start_time, duration, velocity, mute = chunk[0], chunk[1], chunk[2], chunk[3], chunk[4]
+                pitch, start_time, duration, velocity, mute = (
+                    chunk[0], chunk[1], chunk[2], chunk[3], chunk[4],
+                )
                 probability = float(chunk[5]) if step == 6 else 1.0
-                note = Live.Clip.MidiNoteSpecification(start_time=float(start_time),
-                                                       duration=float(duration),
-                                                       pitch=int(pitch),
-                                                       velocity=float(velocity),
-                                                       mute=bool(mute),
-                                                       probability=probability)
-                notes.append(note)
+                specs.append(Live.Clip.MidiNoteSpecification(
+                    pitch=int(pitch), start_time=float(start_time),
+                    duration=float(duration), velocity=float(velocity),
+                    mute=bool(mute), probability=probability,
+                ))
+
+            if not specs:
+                return (0,)
+
             try:
-                clip.add_new_notes(tuple(notes))
-                return (len(notes),)
+                clip.add_new_notes(tuple(specs))
+                return (len(specs),)
             except Exception as e:
                 self.logger.error("arrangement_clip_add_notes FAILED: %s" % e)
                 return (-1, str(e))
@@ -408,7 +435,10 @@ class ClipHandler(AbletonOSCHandler):
                 pitch_start, pitch_span, time_start, time_span = 0, 127, -8192, 16384
             else:
                 raise ValueError("Invalid number of arguments for /arrangement_clip/remove/notes. Either 0 or 4 arguments must be passed.")
-            clip.remove_notes_extended(pitch_start, pitch_span, time_start, time_span)
+            clip.remove_notes_extended(
+                pitch_start, pitch_span, time_start, time_span
+            )
+            return None
 
         self.osc_server.add_handler("/live/arrangement_clip/remove/notes", create_arrangement_clip_callback(arrangement_clip_remove_notes))
 

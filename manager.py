@@ -15,7 +15,7 @@ logger = logging.getLogger("abletonosc")
 # /live/api/ohmic/bridge_version and refuses to proceed if it is lower
 # than its MIN_BRIDGE_VERSION — prevents silent mismatches when one
 # side of the Ohmic/Bridge pair is updated without the other.
-BRIDGE_VERSION = (0, 2, 0)
+BRIDGE_VERSION = (0, 3, 0)
 
 class Manager(ControlSurface):
     def __init__(self, c_instance):
@@ -93,6 +93,16 @@ class Manager(ControlSurface):
             self.show_message(params[0])
         def bridge_version_callback(params):
             return BRIDGE_VERSION
+        def capabilities_callback(params):
+            # Relative import — Ableton's Remote Script loader registers
+            # Ohmic_Bridge as the top-level package; `abletonosc` is a
+            # subpackage of it, so a bare `from abletonosc.capabilities`
+            # absolute import fails with ModuleNotFoundError on the OSC
+            # thread. Relative form works from any method of the
+            # Manager class. (Confirmed against Live 12.3.5 Log.txt.)
+            from .abletonosc.capabilities import probe_capabilities
+            import json
+            return (json.dumps(probe_capabilities()),)
 
         self.osc_server.add_handler("/live/test", test_callback)
         self.osc_server.add_handler("/live/api/reload", reload_callback)
@@ -100,6 +110,7 @@ class Manager(ControlSurface):
         self.osc_server.add_handler("/live/api/set/log_level", set_log_level_callback)
         self.osc_server.add_handler("/live/api/show_message", show_message_callback)
         self.osc_server.add_handler("/live/api/ohmic/bridge_version", bridge_version_callback)
+        self.osc_server.add_handler("/live/api/ohmic/capabilities", capabilities_callback)
 
         with self.component_guard():
             self.handlers = [
@@ -144,6 +155,7 @@ class Manager(ControlSurface):
             importlib.reload(abletonosc.track)
             importlib.reload(abletonosc.view)
             importlib.reload(abletonosc.browser)
+            importlib.reload(abletonosc.capabilities)
             importlib.reload(abletonosc)
         except Exception as e:
             exc = traceback.format_exc()

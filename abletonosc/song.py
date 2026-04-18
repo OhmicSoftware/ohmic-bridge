@@ -118,7 +118,7 @@ class SongHandler(AbletonOSCHandler):
             """Return track metadata + song scale in one call.
 
             Response: JSON string with track_names, track_colors, midi_tracks,
-            num_scenes, root_note, scale_name, tempo.
+            num_scenes, root_note, scale_name, tempo, is_playing.
             """
             try:
                 tracks = self.song.tracks
@@ -127,6 +127,7 @@ class SongHandler(AbletonOSCHandler):
                 track_colors = []
                 midi_tracks = []
                 track_mutes = []
+                playing_slots = []
                 for ti, track in enumerate(tracks):
                     try:
                         track_names.append(track.name)
@@ -134,12 +135,14 @@ class SongHandler(AbletonOSCHandler):
                         track_colors.append("#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF))
                         midi_tracks.append(bool(track.has_midi_input))
                         track_mutes.append(bool(track.mute))
+                        playing_slots.append(int(track.playing_slot_index))
                     except Exception as te:
                         self.logger.error("session_info track %d failed: %s\n%s" % (ti, te, traceback.format_exc()))
                         track_names.append("(error)")
                         track_colors.append("#808080")
                         midi_tracks.append(False)
                         track_mutes.append(False)
+                        playing_slots.append(-1)
                 scene_names = []
                 for si, scene in enumerate(self.song.scenes):
                     try:
@@ -152,11 +155,13 @@ class SongHandler(AbletonOSCHandler):
                     "track_colors": track_colors,
                     "midi_tracks": midi_tracks,
                     "track_mutes": track_mutes,
+                    "playing_slots": playing_slots,
                     "num_scenes": num_scenes,
                     "scene_names": scene_names,
                     "root_note": self.song.root_note,
                     "scale_name": self.song.scale_name,
                     "tempo": self.song.tempo,
+                    "is_playing": bool(self.song.is_playing),
                 }
                 result = json.dumps(data)
                 self.logger.debug("session_info: %d tracks, %d scenes, %d bytes" % (len(track_names), num_scenes, len(result)))
@@ -165,6 +170,34 @@ class SongHandler(AbletonOSCHandler):
                 self.logger.error("session_info FAILED: %s\n%s" % (e, traceback.format_exc()))
                 return (json.dumps({"error": str(e)}),)
         self.osc_server.add_handler("/live/song/get/session_info", session_info)
+
+        def playing_positions(_):
+            """Return playing clip positions and tempo — lightweight sync endpoint."""
+            try:
+                tracks = self.song.tracks
+                positions = {}
+                for ti, track in enumerate(tracks):
+                    try:
+                        psi = int(track.playing_slot_index)
+                        if psi < 0:
+                            continue
+                        clip_slots = track.clip_slots
+                        if psi < len(clip_slots):
+                            clip = clip_slots[psi].clip
+                            if clip is not None:
+                                positions["%d,%d" % (ti, psi)] = clip.playing_position
+                    except Exception:
+                        pass
+                data = json.dumps({
+                    "playing_positions": positions,
+                    "tempo": self.song.tempo,
+                    "is_playing": bool(self.song.is_playing),
+                })
+                return (data,)
+            except Exception as e:
+                self.logger.error("playing_positions FAILED: %s\n%s" % (e, traceback.format_exc()))
+                return (json.dumps({"error": str(e)}),)
+        self.osc_server.add_handler("/live/song/get/playing_positions", playing_positions)
 
         def clip_grid(_):
             """Return occupied clip slots with names and colors in one call.
