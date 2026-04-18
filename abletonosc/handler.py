@@ -137,6 +137,141 @@ class AbletonOSCHandler(Component):
             prop, params = listener_key
             self._stop_listen(target, prop, params)
 
+    #--------------------------------------------------------------------------------
+    # Guarded variants of the generic callbacks.
+    #
+    # Use these for undocumented properties (e.g. scene.tempo,
+    # song.root_note) whose presence and signature are not covered by
+    # Ableton's stability contract. They mirror the per-handler
+    # @guarded_lom decorator pattern: catch any exception, log a full
+    # manually-formatted traceback (never logger.exception — see the
+    # embedded-Python caveat noted on _call_method), and return an OSC
+    # error tuple ("error: <ClassName>: <message>",) so Ohmic gets a
+    # clean reply instead of timing out on silence.
+    #
+    # The plain _set_property / _call_method / _start_listen /
+    # _stop_listen methods above remain unwrapped and are still the
+    # right choice for documented properties — changing those would
+    # add overhead for APIs that Ableton is contractually obliged to
+    # keep working.
+    #--------------------------------------------------------------------------------
+    def _set_property_guarded(self, target, prop, params: Tuple):
+        try:
+            self.logger.info(
+                "Setting property for %s: %s (new value %s)"
+                % (self.class_identifier, prop, params[0])
+            )
+            setattr(target, prop, params[0])
+            return None
+        except Exception as e:
+            try:
+                tb = _traceback.format_exc()
+            except Exception:
+                tb = "(traceback unavailable)"
+            self.logger.error(
+                "%s set %s failed: %s: %s\n%s",
+                self.class_identifier, prop, type(e).__name__, str(e), tb,
+            )
+            return ("error: " + type(e).__name__ + ": " + str(e),)
+
+    def _start_listen_guarded(self, target, prop, params: Optional[Tuple] = (), getter=None):
+        try:
+            def property_changed_callback():
+                try:
+                    if getter is None:
+                        value = getattr(target, prop)
+                    else:
+                        value = getter(params)
+                    if type(value) is not tuple:
+                        value = (value,)
+                    self.logger.info(
+                        "Property %s changed of %s %s: %s"
+                        % (prop, self.class_identifier, str(params), value)
+                    )
+                    osc_address = "/live/%s/get/%s" % (self.class_identifier, prop)
+                    self.osc_server.send(osc_address, (*params, *value,))
+                except Exception as inner_e:
+                    # The listener itself may fire after Ableton removes the
+                    # property, long after _start_listen_guarded returned.
+                    # Log and swallow so Live's listener machinery isn't
+                    # poisoned by an unhandled exception inside a callback.
+                    try:
+                        tb = _traceback.format_exc()
+                    except Exception:
+                        tb = "(traceback unavailable)"
+                    self.logger.error(
+                        "%s listener %s fire failed: %s: %s\n%s",
+                        self.class_identifier, prop,
+                        type(inner_e).__name__, str(inner_e), tb,
+                    )
+
+            listener_key = (prop, tuple(params))
+            if listener_key in self.listener_functions:
+                self._stop_listen_guarded(target, prop, params)
+
+            self.logger.info(
+                "Adding listener for %s %s, property: %s"
+                % (self.class_identifier, str(params), prop)
+            )
+            add_listener_function_name = "add_%s_listener" % prop
+            add_listener_function = getattr(target, add_listener_function_name)
+            add_listener_function(property_changed_callback)
+            self.listener_functions[listener_key] = property_changed_callback
+            self.listener_objects[listener_key] = target
+            #--------------------------------------------------------------------------------
+            # Immediately send the current value (same behavior as _start_listen).
+            #--------------------------------------------------------------------------------
+            property_changed_callback()
+            return None
+        except Exception as e:
+            try:
+                tb = _traceback.format_exc()
+            except Exception:
+                tb = "(traceback unavailable)"
+            self.logger.error(
+                "%s start_listen %s failed: %s: %s\n%s",
+                self.class_identifier, prop, type(e).__name__, str(e), tb,
+            )
+            return ("error: " + type(e).__name__ + ": " + str(e),)
+
+    def _stop_listen_guarded(self, target, prop, params: Optional[Tuple[Any]] = ()):
+        try:
+            listener_key = (prop, tuple(params))
+            if listener_key in self.listener_functions:
+                self.logger.info(
+                    "Removing listener for %s %s, property %s"
+                    % (self.class_identifier, str(params), prop)
+                )
+                listener_function = self.listener_functions[listener_key]
+                remove_listener_function_name = "remove_%s_listener" % prop
+                remove_listener_function = getattr(target, remove_listener_function_name)
+                try:
+                    remove_listener_function(listener_function)
+                except Exception as e:
+                    # This exception may be thrown when an observer is no
+                    # longer connected. Benign — matches _stop_listen.
+                    self.logger.info(
+                        "Exception whilst removing listener (likely benign): %s" % e
+                    )
+                del self.listener_functions[listener_key]
+                del self.listener_objects[listener_key]
+            else:
+                self.logger.warning(
+                    "No listener function found for property: %s (%s)"
+                    % (prop, str(params))
+                )
+            return None
+        except Exception as e:
+            try:
+                tb = _traceback.format_exc()
+            except Exception:
+                tb = "(traceback unavailable)"
+            self.logger.error(
+                "%s stop_listen %s failed: %s: %s\n%s",
+                self.class_identifier, prop, type(e).__name__, str(e), tb,
+            )
+            return ("error: " + type(e).__name__ + ": " + str(e),)
+
 
 # ---------------------------------------------------------------------------
 # Exception-wrapping decorators for undocumented LOM callbacks.

@@ -49,9 +49,10 @@ class SongHandler(AbletonOSCHandler):
             self.osc_server.add_handler("/live/song/%s" % method, callback)
 
         #--------------------------------------------------------------------------------
-        # Callbacks for Song: properties (read/write)
+        # Callbacks for Song: properties (read/write) — documented.
+        # Covered by Ableton's stability contract; ride the generic path.
         #--------------------------------------------------------------------------------
-        properties_rw = [
+        properties_rw_documented = [
             "arrangement_overdub",
             "back_to_arranger",
             "clip_trigger_quantization",
@@ -68,13 +69,24 @@ class SongHandler(AbletonOSCHandler):
             "punch_in",
             "punch_out",
             "record_mode",
-            "root_note",
-            "scale_name",
             "session_record",
             "signature_denominator",
             "signature_numerator",
-            "tempo"
+            "tempo",
         ]
+        #--------------------------------------------------------------------------------
+        # Callbacks for Song: properties (read/write) — undocumented.
+        # Live 12+ global key/scale properties. Writes and listener
+        # registration go through the guarded variants so a future
+        # Ableton removal surfaces a clean OSC error to Ohmic instead of
+        # a silent timeout. See BRIDGE_LOM_AUDIT.md -> "Song Scale
+        # Properties".
+        #--------------------------------------------------------------------------------
+        properties_rw_undocumented = [
+            "root_note",
+            "scale_name",
+        ]
+        properties_rw = properties_rw_documented + properties_rw_undocumented
 
         #--------------------------------------------------------------------------------
         # Callbacks for Song: properties (read-only)
@@ -89,12 +101,24 @@ class SongHandler(AbletonOSCHandler):
             "session_record_status"
         ]
 
+        # Reads: _get_property already catches AttributeError/RuntimeError
+        # for the undocumented case and returns None, so no split needed.
         for prop in properties_r + properties_rw:
             self.osc_server.add_handler("/live/song/get/%s" % prop, partial(self._get_property, self.song, prop))
+
+        # Listeners + writes: documented props use the generic path;
+        # undocumented props use the guarded variants so a removed
+        # property surfaces a clean OSC error instead of a silent timeout.
+        for prop in properties_r + properties_rw_documented:
             self.osc_server.add_handler("/live/song/start_listen/%s" % prop, partial(self._start_listen, self.song, prop))
             self.osc_server.add_handler("/live/song/stop_listen/%s" % prop, partial(self._stop_listen, self.song, prop))
-        for prop in properties_rw:
+        for prop in properties_rw_undocumented:
+            self.osc_server.add_handler("/live/song/start_listen/%s" % prop, partial(self._start_listen_guarded, self.song, prop))
+            self.osc_server.add_handler("/live/song/stop_listen/%s" % prop, partial(self._stop_listen_guarded, self.song, prop))
+        for prop in properties_rw_documented:
             self.osc_server.add_handler("/live/song/set/%s" % prop, partial(self._set_property, self.song, prop))
+        for prop in properties_rw_undocumented:
+            self.osc_server.add_handler("/live/song/set/%s" % prop, partial(self._set_property_guarded, self.song, prop))
 
         #--------------------------------------------------------------------------------
         # Callbacks for Song: Track properties
@@ -114,7 +138,6 @@ class SongHandler(AbletonOSCHandler):
         #--------------------------------------------------------------------------------
         # Bulk endpoints for session grid (optimized — fewer OSC round-trips)
         #--------------------------------------------------------------------------------
-        @guarded_lom_json("session_info")
         @guarded_lom_json("session_info")
         def session_info(_):
             """Return track metadata + song scale in one call.
