@@ -104,3 +104,140 @@ def _quantization_none(osc):
         "restore of clip_trigger_quantization failed — got %r, expected %r"
         % (restored[-1], original_value)
     )
+
+
+# --------------------------------------------------------------------------
+# Shared helpers — tests own their state
+# --------------------------------------------------------------------------
+# These helpers let tests create the preconditions they need (an empty MIDI
+# track, a loadable stock instrument) rather than skipping when the user's
+# session lacks the right state. Every mutation is paired with a read-back
+# that verifies the write landed; every teardown verifies the restore.
+#
+# Used by test_integration_browser.py, test_integration_scene.py,
+# test_integration_song_transport.py, and test_integration_track.py.
+
+
+def create_temp_midi_track(osc):
+    """Create a MIDI track at index -1 (append) and return the new
+    track's index. Asserts via read-back that the track count grew by
+    exactly one. Caller is responsible for eventual
+    delete_track_by_index() cleanup.
+
+    Raises AssertionError on failure so the test fails loudly rather
+    than silently proceeding with a mismatched index."""
+    before = osc.query("/live/song/get/track_names", [])
+    before_count = len(before)
+
+    osc.send_message("/live/song/create_midi_track", [-1])
+    wait_one_tick()
+
+    after = osc.query("/live/song/get/track_names", [])
+    after_count = len(after)
+    assert after_count == before_count + 1, (
+        "create_midi_track did not increment track count — "
+        "expected %d, got %d (before=%r, after=%r)"
+        % (before_count + 1, after_count, before, after)
+    )
+    # Ableton appends new tracks at the tail, so the new index is
+    # before_count (0-based).
+    new_index = before_count
+    # Sanity: the new slot has a non-empty name.
+    new_name = str(after[new_index])
+    assert new_name != "", (
+        "newly-created MIDI track has an empty name — %r" % (after,)
+    )
+    return new_index
+
+
+def delete_track_by_index(osc, track_index):
+    """Delete a track by index via /live/song/delete_track and assert
+    via read-back that the track count dropped by exactly one. Intended
+    for teardown of tracks created by create_temp_midi_track()."""
+    before = osc.query("/live/song/get/track_names", [])
+    before_count = len(before)
+    assert 0 <= track_index < before_count, (
+        "delete_track_by_index called with out-of-range index %d "
+        "(track_count=%d)" % (track_index, before_count)
+    )
+
+    osc.send_message("/live/song/delete_track", [track_index])
+    wait_one_tick()
+
+    after = osc.query("/live/song/get/track_names", [])
+    after_count = len(after)
+    assert after_count == before_count - 1, (
+        "delete_track did not decrement track count — "
+        "expected %d, got %d"
+        % (before_count - 1, after_count)
+    )
+
+
+# Stock Ableton instruments we'll attempt to load in priority order.
+# Operator ships with Live Suite, but Live Intro / Standard licenses
+# don't include it — so we fall back through the list and, if none
+# match, use whatever the browser reports as the first loadable
+# instrument on the user's machine.
+_STOCK_INSTRUMENT_PREFERENCE = (
+    "Operator",
+    "Simpler",
+    "Drum Rack",
+    "Analog",
+    "Sampler",
+    "Wavetable",
+    "Collision",
+    "Electric",
+    "Impulse",
+    "Tension",
+)
+
+
+def find_loadable_instrument(osc):
+    """Return the name of a stock instrument that can be loaded via
+    /live/browser/load with the "instruments" category on the current
+    Live install. Strategy:
+
+      1. Try each name in the stock preference list via /live/browser/search.
+         Return the first one the browser confirms is present.
+      2. If none match (Intro license without Suite content), fall
+         back to the first result of an unfiltered /live/browser/search
+         with an empty query — empty string is contained in every item
+         name, so the search returns every loadable instrument.
+
+    Raises AssertionError if no loadable instrument exists in the
+    "instruments" category at all (a genuinely broken Live install)."""
+    for candidate in _STOCK_INSTRUMENT_PREFERENCE:
+        reply = osc.query(
+            "/live/browser/search", ["instruments", candidate],
+        )
+        # Wire: (category, query, match_1, ..., match_n) on success;
+        # (category, query, "no matches") on failure.
+        if len(reply) < 3:
+            continue
+        matches = list(reply[2:])
+        if matches == ["no matches"]:
+            continue
+        # Prefer an exact (case-sensitive) name match so we get
+        # "Operator" rather than a preset that happens to contain the
+        # word.
+        if candidate in matches:
+            return candidate
+        # Fallback: the browser found a match whose display name
+        # differs from the query. Use the first result.
+        return str(matches[0])
+
+    # No preferred stock instrument matched — widen the search to
+    # "anything loadable in instruments". Empty query matches every
+    # item because "" is a substring of every string.
+    reply = osc.query("/live/browser/search", ["instruments", ""])
+    assert len(reply) >= 3, (
+        "/live/browser/search with empty query returned too few "
+        "results — expected (category, query, *matches), got %r"
+        % (reply,)
+    )
+    matches = list(reply[2:])
+    assert matches and matches != ["no matches"], (
+        "no loadable instruments found in the Live browser — "
+        "cannot proceed with browser/load tests. Reply: %r" % (reply,)
+    )
+    return str(matches[0])

@@ -4,13 +4,8 @@ Covers name/mute round-trip, has_midi_input, devices/name, delete_device,
 and track.stop_all_clips. All tests target TRACK_ID = 0 which must be a
 MIDI track in the test project — skip cleanly if not.
 
-Note on /live/track/load/device: the Bridge does NOT register this
-endpoint (confirmed against abletonosc/track.py — only delete_device
-and stop_all_clips are exposed as methods). Loading a device onto a
-track is done via /live/browser/load, which is already covered by
+Device loading is done via /live/browser/load, covered by
 test_integration_browser.py::test_browser_load_instrument_then_read_back.
-The test for /live/track/load/device in this file therefore skips with
-a clear reason rather than faking success.
 
 do not parallelize — these tests mutate track 0's name, mute state,
 and device chain. Running them alongside other track-touching tests
@@ -18,7 +13,12 @@ will thrash shared state.
 """
 import pytest
 
-from tests.integration.conftest import wait_one_tick
+from tests.integration.conftest import (
+    create_temp_midi_track,
+    delete_track_by_index,
+    find_loadable_instrument,
+    wait_one_tick,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -156,25 +156,21 @@ def _query_clip_trigger_quantization(osc):
 
 
 def test_track_stop_all_clips_stops_track_clip(osc):
-    """Fire the clip at (TRACK_ID, 0), verify is_playing=True,
-    send /live/track/stop_all_clips for TRACK_ID, verify is_playing=
-    False. Requires quantization=None so the fire/stop flip
-    immediately. Manages its own quantization save/restore so this
-    test file doesn't need to depend on another file's fixture."""
+    """Create a temporary MIDI track at index -1, create a clip with
+    a note in slot 0 of that track, fire the clip, verify
+    is_playing=True, call /live/track/stop_all_clips on the track,
+    verify is_playing=False. Teardown (verified step by step): stop
+    transport, delete clip, delete track, restore quantization.
+
+    Manages its own quantization save/restore with verified read-back
+    so this test file doesn't need to depend on another file's
+    fixture. Track 0 is never touched.
+    """
     import time
 
-    _require_midi_track_0(osc)
+    original_track_count = len(osc.query("/live/song/get/track_names", []))
 
-    # Precondition: clip exists at (TRACK_ID, 0).
-    has_clip = osc.query("/live/clip_slot/get/has_clip", [TRACK_ID, 0])
-    if not (len(has_clip) >= 3 and bool(has_clip[2])):
-        pytest.skip(
-            "no clip at track %d slot 0 — stop_all_clips test needs "
-            "a fireable clip at (%d, 0). Add a clip and re-run."
-            % (TRACK_ID, TRACK_ID)
-        )
-
-    # Save + disable quantization so the fire/stop flip immediately.
+    # Save + disable quantization so fire/stop flip immediately.
     original_q = _query_clip_trigger_quantization(osc)
     osc.send_message("/live/song/set/clip_trigger_quantization", [0])
     wait_one_tick()
@@ -184,40 +180,106 @@ def test_track_stop_all_clips_stops_track_clip(osc):
         "got %r" % (probe_q,)
     )
 
+    track_idx = None
     try:
-        # Fire the clip and verify it's playing.
-        osc.send_message("/live/clip_slot/fire", [TRACK_ID, 0])
+        track_idx = create_temp_midi_track(osc)
+        slot_idx = 0
+
+        # Arrange: create clip + verify has_clip=True.
+        osc.send_message(
+            "/live/clip_slot/create_clip", [track_idx, slot_idx, 4.0],
+        )
+        wait_one_tick()
+        has_clip = osc.query(
+            "/live/clip_slot/get/has_clip", [track_idx, slot_idx],
+        )
+        assert len(has_clip) >= 3 and bool(has_clip[2]) is True, (
+            "create_clip did not land — has_clip reply %r" % (has_clip,)
+        )
+
+        # Arrange: add a note.
+        osc.send_message(
+            "/live/clip/add/notes",
+            [track_idx, slot_idx, 60, 0.0, 1.0, 100, 0, 1.0],
+        )
+        wait_one_tick()
+        notes_reply = osc.query(
+            "/live/clip/get/notes", [track_idx, slot_idx],
+        )
+        assert len(notes_reply) >= 8, (
+            "add/notes did not land — got %r" % (notes_reply,)
+        )
+
+        # Fire the clip + verify is_playing=True.
+        osc.send_message("/live/clip_slot/fire", [track_idx, slot_idx])
         time.sleep(0.3)
-        is_playing = osc.query("/live/clip/get/is_playing", [TRACK_ID, 0])
+        is_playing = osc.query(
+            "/live/clip/get/is_playing", [track_idx, slot_idx],
+        )
         assert (
             len(is_playing) >= 3
             and bool(is_playing[2]) is True
         ), (
-            "clip at (%d, 0) did not start playing after fire — got %r"
-            % (TRACK_ID, is_playing)
+            "clip at (%d, %d) did not start playing after fire — got %r"
+            % (track_idx, slot_idx, is_playing)
         )
 
-        # Act: track.stop_all_clips for TRACK_ID.
-        osc.send_message("/live/track/stop_all_clips", [TRACK_ID])
+        # Act: track.stop_all_clips on the temp track.
+        osc.send_message("/live/track/stop_all_clips", [track_idx])
         time.sleep(0.3)
 
         # Verify via read-back.
         is_playing_after = osc.query(
-            "/live/clip/get/is_playing", [TRACK_ID, 0],
+            "/live/clip/get/is_playing", [track_idx, slot_idx],
         )
         assert (
             len(is_playing_after) >= 3
             and bool(is_playing_after[2]) is False
         ), (
-            "track.stop_all_clips did not stop the clip at (%d, 0) — "
+            "track.stop_all_clips did not stop the clip at (%d, %d) — "
             "is_playing still %r"
-            % (TRACK_ID, is_playing_after)
+            % (track_idx, slot_idx, is_playing_after)
         )
     finally:
-        # Belt-and-suspenders: stop anything that might still be
-        # firing (song-wide) before restoring quantization.
+        # Teardown: belt-and-suspenders song-wide stop + verify
+        # transport quiescent.
         osc.send_message("/live/song/stop_all_clips", [])
         time.sleep(0.2)
+        osc.send_message("/live/song/stop_playing", [])
+        time.sleep(0.2)
+        song_playing = osc.query("/live/song/get/is_playing", [])
+        assert bool(song_playing[0]) is False, (
+            "cleanup stop_playing failed — song transport still "
+            "playing"
+        )
+
+        # Teardown: delete clip + track (only if we got far enough
+        # to create them).
+        if track_idx is not None:
+            has_clip_probe = osc.query(
+                "/live/clip_slot/get/has_clip", [track_idx, 0],
+            )
+            if len(has_clip_probe) >= 3 and bool(has_clip_probe[2]):
+                osc.send_message(
+                    "/live/clip_slot/delete_clip", [track_idx, 0],
+                )
+                wait_one_tick()
+                has_after = osc.query(
+                    "/live/clip_slot/get/has_clip", [track_idx, 0],
+                )
+                assert bool(has_after[2]) is False, (
+                    "delete_clip teardown did not remove clip — "
+                    "has_clip still %r" % (has_after,)
+                )
+            delete_track_by_index(osc, track_idx)
+            final_count = len(osc.query("/live/song/get/track_names", []))
+            assert final_count == original_track_count, (
+                "track count not restored after teardown — "
+                "expected %d, got %d"
+                % (original_track_count, final_count)
+            )
+
+        # Teardown: restore quantization + verify.
         osc.send_message(
             "/live/song/set/clip_trigger_quantization", [original_q],
         )
@@ -242,100 +304,143 @@ def _device_names_on_track(osc, track_id):
 
 
 def test_track_delete_device_then_restore(osc):
-    """Delete the last device on track 0 and restore it via
-    /live/browser/load. Every mutation verified via read-back.
+    """Create a temporary MIDI track at index -1, load a stock
+    instrument onto it via /live/browser/load, verify the device is
+    present, delete the device via /live/track/delete_device, verify
+    absence, reload the same instrument, verify presence, then delete
+    the temporary track. Track 0 is never touched.
 
-    Restoration is only safe if the existing device was a stock
-    Ableton instrument/effect (Operator, Reverb, etc.) — VST/AU
-    plugins carry state we can't faithfully recreate, so skip if the
-    last device's name isn't in the stock-instrument allow-list.
-    Prefer to skip than to leave the user's session mutated.
+    Every mutation verified via read-back. find_loadable_instrument
+    picks whichever stock instrument the current Live install has
+    (Operator on Suite, else the first-available instrument from the
+    browser) so the test works on any license tier.
     """
-    _require_midi_track_0(osc)
+    original_track_count = len(osc.query("/live/song/get/track_names", []))
+    original_track_names = tuple(
+        str(n) for n in osc.query("/live/song/get/track_names", [])
+    )
 
-    before = _device_names_on_track(osc, TRACK_ID)
-    if len(before) == 0:
-        pytest.skip(
-            "track %d has no devices — delete_device test needs at "
-            "least one existing device to exercise the endpoint."
-            % TRACK_ID
+    instrument_name = find_loadable_instrument(osc)
+    assert instrument_name, (
+        "find_loadable_instrument returned an empty string — cannot "
+        "proceed with delete_device/restore verification"
+    )
+
+    track_idx = create_temp_midi_track(osc)
+    try:
+        # Record the baseline devices on the new track (Ableton
+        # templates may pre-populate new MIDI tracks).
+        before_baseline = _device_names_on_track(osc, track_idx)
+        baseline_count = len(before_baseline)
+
+        # Load the instrument + verify presence.
+        load_reply = osc.query(
+            "/live/browser/load",
+            [track_idx, "instruments", instrument_name],
+        )
+        assert len(load_reply) >= 1 and load_reply[-1] == "ok", (
+            "initial browser/load did not return ok for %r — got %r"
+            % (instrument_name, load_reply)
+        )
+        wait_one_tick()
+
+        after_first_load = _device_names_on_track(osc, track_idx)
+        assert len(after_first_load) >= baseline_count + 1, (
+            "device count did not grow after initial load — "
+            "baseline=%d (%r), after=%d (%r)"
+            % (baseline_count, before_baseline,
+               len(after_first_load), after_first_load)
+        )
+        # Identify the newly-loaded device by set difference. Live
+        # may insert it at the head of the chain, not the tail.
+        new_devices_first = [
+            name for name in after_first_load
+            if name not in before_baseline
+        ] or [after_first_load[-1]]
+        # Find one new device whose name matches (exact or substring)
+        # the requested instrument — that's the one we'll delete.
+        target = instrument_name.lower()
+        loaded_device_name = None
+        loaded_device_index = None
+        for idx, name in enumerate(after_first_load):
+            if name in before_baseline:
+                continue
+            lname = name.lower()
+            if lname == target or target in lname or lname in target:
+                loaded_device_name = name
+                loaded_device_index = idx
+                break
+        # Fallback: use the first new device.
+        if loaded_device_name is None:
+            loaded_device_name = new_devices_first[0]
+            loaded_device_index = after_first_load.index(loaded_device_name)
+
+        # Act: delete the loaded device.
+        osc.send_message(
+            "/live/track/delete_device", [track_idx, loaded_device_index],
+        )
+        wait_one_tick()
+
+        after_delete = _device_names_on_track(osc, track_idx)
+        assert len(after_delete) == len(after_first_load) - 1, (
+            "delete_device did not reduce device count — "
+            "expected %d, got %d (%r)"
+            % (len(after_first_load) - 1, len(after_delete), after_delete)
+        )
+        # Verify: the deleted device is no longer present (or at
+        # least, there's one fewer instance of it).
+        assert after_delete.count(loaded_device_name) == (
+            after_first_load.count(loaded_device_name) - 1
+        ), (
+            "delete_device did not remove %r — before=%r, after=%r"
+            % (loaded_device_name, after_first_load, after_delete)
         )
 
-    # Stock Ableton instruments we're confident we can reload by name
-    # via /live/browser/load under the "instruments" category. Keep
-    # this list conservative: anything not here is skipped.
-    # (Devices also live under "audio_effects" and "midi_effects" —
-    # for audit simplicity this test only restores instruments. An
-    # audio-effect / midi-effect variant can be added later.)
-    RESTORABLE_INSTRUMENTS = {
-        "Operator", "Analog", "Simpler", "Sampler", "Wavetable",
-        "Collision", "Electric", "Drum Rack", "Impulse", "Tension",
-        "External Instrument",
-    }
-    last_name = before[-1]
-    if last_name not in RESTORABLE_INSTRUMENTS:
-        pytest.skip(
-            "last device on track %d is %r — not in the safe "
-            "restore allow-list. Skipping to avoid leaving the "
-            "session mutated if the test fails mid-way."
-            % (TRACK_ID, last_name)
+        # Act: reload the instrument + verify presence again.
+        reload_reply = osc.query(
+            "/live/browser/load",
+            [track_idx, "instruments", instrument_name],
+        )
+        assert len(reload_reply) >= 1 and reload_reply[-1] == "ok", (
+            "reload browser/load did not return ok — got %r"
+            % (reload_reply,)
+        )
+        wait_one_tick()
+
+        after_reload = _device_names_on_track(osc, track_idx)
+        assert len(after_reload) >= len(after_delete) + 1, (
+            "device count did not grow after reload — "
+            "before=%d (%r), after=%d (%r)"
+            % (len(after_delete), after_delete,
+               len(after_reload), after_reload)
+        )
+        # Verify: a device whose name matches the instrument is now
+        # present again.
+        reload_matched = False
+        for name in after_reload:
+            lname = name.lower()
+            if lname == target or target in lname or lname in target:
+                reload_matched = True
+                break
+        assert reload_matched, (
+            "none of the devices in %r match requested instrument %r "
+            "after reload"
+            % (after_reload, instrument_name)
+        )
+    finally:
+        # Teardown: delete the temporary track + verify count and
+        # names restored.
+        delete_track_by_index(osc, track_idx)
+        final = osc.query("/live/song/get/track_names", [])
+        assert len(final) == original_track_count, (
+            "track count not restored after teardown — "
+            "expected %d, got %d"
+            % (original_track_count, len(final))
+        )
+        assert tuple(str(n) for n in final) == original_track_names, (
+            "track names not restored after teardown — "
+            "expected %r, got %r"
+            % (original_track_names, tuple(str(n) for n in final))
         )
 
-    last_index = len(before) - 1
 
-    # Act: delete the last device.
-    osc.send_message("/live/track/delete_device", [TRACK_ID, last_index])
-    wait_one_tick()
-
-    after_delete = _device_names_on_track(osc, TRACK_ID)
-    assert len(after_delete) == len(before) - 1, (
-        "delete_device did not reduce device count — "
-        "expected %d, got %d" % (len(before) - 1, len(after_delete))
-    )
-    assert after_delete == before[:-1], (
-        "delete_device removed the wrong device — "
-        "expected %r, got %r" % (before[:-1], after_delete)
-    )
-
-    # Restore via browser/load.
-    reply = osc.query(
-        "/live/browser/load",
-        [TRACK_ID, "instruments", last_name],
-    )
-    assert len(reply) >= 1, "browser/load reply was empty: %r" % (reply,)
-    assert reply[-1] == "ok", (
-        "browser/load did not return ok — got %r" % (reply,)
-    )
-    wait_one_tick()
-
-    restored = _device_names_on_track(osc, TRACK_ID)
-    assert len(restored) == len(before), (
-        "browser/load did not restore device count — "
-        "expected %d, got %d" % (len(before), len(restored))
-    )
-    assert restored[-1] == last_name, (
-        "restored last device name doesn't match original — "
-        "expected %r, got %r" % (last_name, restored[-1])
-    )
-
-
-# --------------------------------------------------------------------------
-# /live/track/load/device — not registered in the Bridge
-# --------------------------------------------------------------------------
-def test_track_load_device_then_delete(osc):
-    """/live/track/load/device is NOT a registered endpoint in the
-    Bridge — abletonosc/track.py exposes only delete_device and
-    stop_all_clips as methods, and no browser-load-by-track shortcut
-    exists. Device loading is done via /live/browser/load (see
-    test_integration_browser.py::test_browser_load_instrument_then_read_back).
-
-    Skip with a clear reason so the audit trail is explicit: if Ohmic
-    ever adds a track.load_device call site, this endpoint will need
-    to be registered and this test will need to be implemented.
-    """
-    pytest.skip(
-        "/live/track/load/device not registered in the Bridge — "
-        "use /live/browser/load [track, category, name] instead. "
-        "Confirmed against abletonosc/track.py: only delete_device "
-        "and stop_all_clips are registered as track methods."
-    )

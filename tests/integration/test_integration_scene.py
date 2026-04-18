@@ -13,7 +13,11 @@ import time
 
 import pytest
 
-from tests.integration.conftest import wait_one_tick
+from tests.integration.conftest import (
+    create_temp_midi_track,
+    delete_track_by_index,
+    wait_one_tick,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -138,75 +142,77 @@ def test_scene_set_name_roundtrip(osc, _ensure_two_scenes):
 # --------------------------------------------------------------------------
 # scene fire
 # --------------------------------------------------------------------------
-def _any_midi_clip_in_scene(osc, scene_index):
-    """Return (track_idx, clip_idx) of the first MIDI clip in the
-    given scene, or None if no clips exist in that scene. Walks every
-    track's clip_slot at scene_index and queries has_clip."""
-    track_names = osc.query("/live/song/get/track_names", [])
-    num_tracks = len(track_names)
-    for track_idx in range(num_tracks):
-        reply = osc.query(
-            "/live/clip_slot/get/has_clip", [track_idx, scene_index],
-        )
-        if len(reply) >= 3 and bool(reply[2]):
-            # Confirm it's a MIDI clip (audio clips can't be driven
-            # by add/notes — for a fire test we just need something
-            # fireable, so has_clip=True is sufficient).
-            return (track_idx, scene_index)
-    return None
-
-
 def test_scene_fire_with_clip_fires_clip(osc, _quantization_none,
                                           _ensure_two_scenes):
-    """Fire scene 0 via /live/scene/fire, wait for transport flip,
-    verify at least one clip in scene 0 is playing via
-    /live/clip/get/is_playing. Requires quantization=None so fire
-    takes effect immediately.
+    """Create a temporary MIDI track, put a MIDI clip with a note in
+    slot SCENE_ID on that track, fire scene SCENE_ID via
+    /live/scene/fire, and verify the clip's /live/clip/get/is_playing
+    flips True. Every mutation paired with a read-back.
 
-    If scene 0 is empty (no clips on any track), skip — this is a
-    project-setup precondition, not a Bridge failure. The autouse
-    fixture ensures >= 2 scenes exist but doesn't guarantee clips
-    in them.
+    Requires quantization=None so scene/fire takes effect immediately
+    instead of waiting for the next quantized boundary.
 
-    Teardown: stop_all_clips via /live/song/stop_all_clips with
-    verified read-back so other tests don't inherit a firing scene.
+    Teardown (verified step by step):
+      1. stop all clips via /live/song/stop_all_clips + verify clip
+         is_playing=False.
+      2. stop song transport via /live/song/stop_playing + verify
+         song is_playing=False.
+      3. delete the temporary clip + verify has_clip=False.
+      4. delete the temporary track + verify track count restored.
     """
-    target = _any_midi_clip_in_scene(osc, SCENE_ID)
-    if target is None:
-        pytest.skip(
-            "scene %d has no clips on any track — scene/fire test "
-            "needs at least one fireable clip in scene %d. Add a "
-            "clip and re-run." % (SCENE_ID, SCENE_ID)
-        )
+    original_track_count = len(osc.query("/live/song/get/track_names", []))
 
-    track_idx, slot_idx = target
-
-    # Precondition: clip not currently playing.
-    pre = osc.query("/live/clip/get/is_playing", [track_idx, slot_idx])
-    assert len(pre) >= 3, (
-        "clip is_playing precondition read was incomplete: %r" % (pre,)
-    )
-    if bool(pre[2]):
-        # Stop anything that's already firing so the scene/fire
-        # transition is observable. Verify the stop landed.
-        osc.send_message("/live/song/stop_all_clips", [])
-        time.sleep(0.3)
-        pre2 = osc.query(
-            "/live/clip/get/is_playing", [track_idx, slot_idx],
-        )
-        assert bool(pre2[2]) is False, (
-            "couldn't stop playback before scene/fire test — got %r"
-            % (pre2,)
-        )
-
+    # Arrange: create the temporary track + clip. Fixture helpers
+    # assert the mutations landed; we don't need to re-check here.
+    track_idx = create_temp_midi_track(osc)
     try:
+        slot_idx = SCENE_ID
+        osc.send_message(
+            "/live/clip_slot/create_clip", [track_idx, slot_idx, 4.0],
+        )
+        wait_one_tick()
+        has_clip = osc.query(
+            "/live/clip_slot/get/has_clip", [track_idx, slot_idx],
+        )
+        assert len(has_clip) >= 3 and bool(has_clip[2]) is True, (
+            "create_clip did not land — has_clip still %r" % (has_clip,)
+        )
+
+        # Add a note so the clip is non-silent when fired (firing an
+        # empty clip does transition clip.is_playing, but making the
+        # clip audible helps when diagnosing flaky test runs
+        # manually).
+        osc.send_message(
+            "/live/clip/add/notes",
+            [track_idx, slot_idx, 60, 0.0, 1.0, 100, 0, 1.0],
+        )
+        wait_one_tick()
+        notes_reply = osc.query(
+            "/live/clip/get/notes", [track_idx, slot_idx],
+        )
+        assert len(notes_reply) >= 8, (
+            "add/notes did not land — got %r" % (notes_reply,)
+        )
+
+        # Precondition: clip not currently playing.
+        pre = osc.query("/live/clip/get/is_playing", [track_idx, slot_idx])
+        assert len(pre) >= 3, (
+            "clip is_playing precondition read was incomplete: %r"
+            % (pre,)
+        )
+        assert bool(pre[2]) is False, (
+            "freshly-created clip was unexpectedly already playing — "
+            "got %r" % (pre,)
+        )
+
         # Act: fire the scene.
         osc.send_message("/live/scene/fire", [SCENE_ID])
         # scene/fire crosses Live's scheduler boundary even with
         # quantization=None — give it 0.3s like the other fire tests.
         time.sleep(0.3)
 
-        # Verify via read-back: the target clip is now playing.
+        # Verify via read-back: the clip in the fired scene is now
+        # playing.
         after = osc.query(
             "/live/clip/get/is_playing", [track_idx, slot_idx],
         )
@@ -216,23 +222,52 @@ def test_scene_fire_with_clip_fires_clip(osc, _quantization_none,
             % (track_idx, slot_idx, after)
         )
     finally:
-        # Cleanup: stop all clips, verify quiescent. Also stop song
-        # transport — scene/fire starts Live's song transport, and
-        # stop_all_clips only halts clips without stopping transport.
+        # Teardown step 1: stop all clips + verify quiescent.
         osc.send_message("/live/song/stop_all_clips", [])
         time.sleep(0.3)
-        final = osc.query(
-            "/live/clip/get/is_playing", [track_idx, slot_idx],
+        # Only check is_playing if the clip slot still has a clip —
+        # if the create_clip failed earlier, has_clip is False and
+        # /live/clip/get/is_playing returns nothing useful.
+        has_clip_probe = osc.query(
+            "/live/clip_slot/get/has_clip", [track_idx, SCENE_ID],
         )
-        assert bool(final[2]) is False, (
-            "cleanup stop_all_clips failed — clip at (%d, %d) "
-            "still playing"
-            % (track_idx, slot_idx)
-        )
+        if len(has_clip_probe) >= 3 and bool(has_clip_probe[2]):
+            clip_playing = osc.query(
+                "/live/clip/get/is_playing", [track_idx, SCENE_ID],
+            )
+            assert bool(clip_playing[2]) is False, (
+                "cleanup stop_all_clips failed — clip at (%d, %d) "
+                "still playing"
+                % (track_idx, SCENE_ID)
+            )
+
+            # Teardown step 3: delete the clip, verify has_clip=False.
+            osc.send_message(
+                "/live/clip_slot/delete_clip", [track_idx, SCENE_ID],
+            )
+            wait_one_tick()
+            has_clip_after = osc.query(
+                "/live/clip_slot/get/has_clip", [track_idx, SCENE_ID],
+            )
+            assert bool(has_clip_after[2]) is False, (
+                "delete_clip teardown did not remove clip — "
+                "has_clip still %r" % (has_clip_after,)
+            )
+
+        # Teardown step 2: stop transport + verify song quiescent.
         osc.send_message("/live/song/stop_playing", [])
         time.sleep(0.2)
         song_playing = osc.query("/live/song/get/is_playing", [])
         assert bool(song_playing[0]) is False, (
             "cleanup stop_playing failed — song transport still "
             "playing after teardown"
+        )
+
+        # Teardown step 4: delete the temporary track + verify count.
+        delete_track_by_index(osc, track_idx)
+        final_count = len(osc.query("/live/song/get/track_names", []))
+        assert final_count == original_track_count, (
+            "track count not restored after teardown — "
+            "expected %d, got %d"
+            % (original_track_count, final_count)
         )
