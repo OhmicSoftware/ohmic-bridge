@@ -1,0 +1,6 @@
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires a running Ableton Live with Ohmic Bridge loaded as a Remote Script. Run with `pytest -m integration`. The default pytest invocation excludes these tests.",
+]
+addopts = "-m 'not integration'"
+testpaths = ["tests"]
