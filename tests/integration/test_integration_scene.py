@@ -140,6 +140,91 @@ def test_scene_set_name_roundtrip(osc, _ensure_two_scenes):
 
 
 # --------------------------------------------------------------------------
+# create_scene + per-track empty-slot verification
+# --------------------------------------------------------------------------
+def test_create_scene_yields_empty_slot_on_every_midi_track(osc):
+    """Ohmic's unified-target resolver relies on `create_scene(-1)` to
+    append a scene whose clip slot is empty on every MIDI track, so a
+    progression can be dropped into the new slot without overwriting an
+    existing clip. This integration test asserts that contract against
+    real Ableton.
+
+    Creates a temporary MIDI track, fills scene 0 on it with a clip to
+    prove the pre-condition ("track has some occupied slots"), then
+    calls `create_scene(-1)` and verifies the newly-appended scene
+    index has NO clip on the temporary track (has_clip returns 0/False).
+    Teardown restores both the track and the scene count.
+    """
+    # Record baseline state so teardown is exact.
+    scenes_before = osc.query("/live/song/get/num_scenes", [])
+    baseline_scene_count = int(scenes_before[0])
+
+    track_index = create_temp_midi_track(osc)
+
+    try:
+        # Drop a clip into scene 0 on the new track to establish "occupied".
+        osc.send_message(
+            "/live/clip_slot/create_clip",
+            [track_index, 0, 4.0],
+        )
+        wait_one_tick()
+        has_clip_scene_0 = osc.query(
+            "/live/clip_slot/get/has_clip", [track_index, 0],
+        )
+        # Reply: (track_index, scene_index, has_clip).
+        assert int(has_clip_scene_0[-1]) == 1, (
+            "pre-condition failed: scene 0 should be occupied after "
+            "create_clip — got %r" % (has_clip_scene_0,)
+        )
+
+        # Create a new scene at the end.
+        osc.send_message("/live/song/create_scene", [-1])
+        wait_one_tick()
+
+        # Verify scene count grew by exactly one.
+        scenes_after = osc.query("/live/song/get/num_scenes", [])
+        after_count = int(scenes_after[0])
+        assert after_count == baseline_scene_count + 1, (
+            "create_scene(-1) did not append exactly one scene — "
+            "expected %d, got %d" % (baseline_scene_count + 1, after_count)
+        )
+
+        # New scene's index is baseline_scene_count (0-based, appended at end).
+        new_scene_index = baseline_scene_count
+        has_clip_new = osc.query(
+            "/live/clip_slot/get/has_clip",
+            [track_index, new_scene_index],
+        )
+        assert int(has_clip_new[-1]) == 0, (
+            "create_scene(-1) produced a new scene whose slot on the "
+            "test track is NOT empty — unified-target auto-create "
+            "cannot assume a safe write landing: %r" % (has_clip_new,)
+        )
+
+        # Tear down the clip on scene 0 (the track deletion below also
+        # removes it, but we keep it explicit for symmetry).
+        osc.send_message(
+            "/live/clip_slot/delete_clip", [track_index, 0],
+        )
+        wait_one_tick()
+    finally:
+        # Remove the added scene (appended at end = index after_count - 1).
+        try:
+            cur = osc.query("/live/song/get/num_scenes", [])
+            cur_count = int(cur[0])
+            if cur_count > baseline_scene_count:
+                osc.send_message("/live/song/delete_scene", [cur_count - 1])
+                wait_one_tick()
+                restore = osc.query("/live/song/get/num_scenes", [])
+                assert int(restore[0]) == baseline_scene_count, (
+                    "teardown: scene count not restored — expected %d, "
+                    "got %d" % (baseline_scene_count, int(restore[0]))
+                )
+        finally:
+            delete_track_by_index(osc, track_index)
+
+
+# --------------------------------------------------------------------------
 # scene fire
 # --------------------------------------------------------------------------
 def test_scene_fire_with_clip_fires_clip(osc, _quantization_none,

@@ -61,6 +61,67 @@ def _decode_arrangement_notes(reply):
     return notes
 
 
+def test_ableton_silently_allows_overlapping_arrangement_clips(osc):
+    """Regression guard for Ohmic's Build-to-Arrangement overwrite pre-check.
+
+    Ohmic's Build-to-Arr feature assumes Ableton's ``track.create_midi_clip``
+    silently allows overlapping arrangement clips on the same track —
+    meaning the new clip visually covers the old one with no exception
+    raised, and the user's original notes become hidden/unrecoverable.
+    That's why the Ohmic side queries the existing clip ranges and
+    prompts the user before creating.
+
+    If Ableton ever changes this behavior (e.g. starts throwing an
+    exception, or auto-truncating the existing clip), this test will
+    fail first — a signal that the Ohmic-side guard may be ripe for
+    simplification OR may need a different strategy.
+
+    Exercises the contract directly: create clip A at [0, 16), then
+    attempt to create clip B at [8, 24) (6-beat overlap). Assert both
+    clips coexist in the LOM's arrangement_clips listing afterward.
+    """
+    # Capture baseline so teardown is exact.
+    baseline_reply = osc.query(
+        "/live/track/get/arrangement_clips/start_time", [TRACK_ID])
+    baseline_count = max(len(list(baseline_reply)) - 1, 0)
+
+    osc.send_message("/live/arrangement_clip/create", [TRACK_ID, 0.0, 16.0])
+    wait_one_tick()
+    osc.send_message("/live/arrangement_clip/create", [TRACK_ID, 8.0, 16.0])
+    wait_one_tick()
+
+    try:
+        starts_reply = osc.query(
+            "/live/track/get/arrangement_clips/start_time", [TRACK_ID])
+        starts = [float(s) for s in list(starts_reply)[1:]]
+        # Both clips must coexist — Ableton did not reject the second
+        # create nor auto-truncate the first. This is the behavior Ohmic
+        # relies on being true so its pre-check is necessary.
+        assert 0.0 in starts, (
+            f"expected clip at start=0.0 in arrangement_clips: {starts!r}")
+        assert 8.0 in starts, (
+            f"expected clip at start=8.0 (overlapping the [0,16) clip) "
+            f"to coexist: {starts!r}")
+
+        lengths_reply = osc.query(
+            "/live/track/get/arrangement_clips/length", [TRACK_ID])
+        lengths = [float(v) for v in list(lengths_reply)[1:]]
+        # The first clip's length was NOT truncated — Ableton did not
+        # trim [0,16) to [0,8) to make room for the overlapping clip.
+        # If it ever did, our pre-check's notion of "conflict range"
+        # would need to be reconsidered.
+        assert 16.0 in lengths, (
+            f"existing clip's length should not be auto-truncated: {lengths!r}")
+    finally:
+        # Teardown: delete in reverse-index order so indices stay valid.
+        final_reply = osc.query(
+            "/live/track/get/arrangement_clips/start_time", [TRACK_ID])
+        count = max(len(list(final_reply)) - 1, 0)
+        for i in range(count - 1, baseline_count - 1, -1):
+            osc.send_message("/live/arrangement_clip/delete", [TRACK_ID, i])
+            wait_one_tick()
+
+
 def test_arrangement_clip_set_name_roundtrips(osc):
     """Write arrangement_clip.name via the new set handler and verify the
     change shows up in both the per-clip getter and the bulk track getter."""
