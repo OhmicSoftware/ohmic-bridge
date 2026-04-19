@@ -472,6 +472,30 @@ class ClipHandler(AbletonOSCHandler):
 
         self.osc_server.add_handler("/live/arrangement_clip/delete", arrangement_clip_delete)
 
+        @guarded_lom("arrangement_clip_set_name")
+        def arrangement_clip_set_name(clip, params: Tuple[Any] = ()):
+            # Rename an arrangement-view clip. Uses Clip.name (documented
+            # read-write property in Live's LOM), the same setter used for
+            # session clips via properties_rw above.
+            if len(params) != 1:
+                raise ValueError(
+                    "Invalid number of arguments for "
+                    "/live/arrangement_clip/set/name. One argument (name) required.")
+            clip.name = str(params[0])
+            return None
+
+        self.osc_server.add_handler(
+            "/live/arrangement_clip/set/name",
+            create_arrangement_clip_callback(arrangement_clip_set_name))
+
+        @guarded_lom("arrangement_clip_get_name")
+        def arrangement_clip_get_name(clip, params: Tuple[Any] = ()):
+            return (clip.name,)
+
+        self.osc_server.add_handler(
+            "/live/arrangement_clip/get/name",
+            create_arrangement_clip_callback(arrangement_clip_get_name))
+
         def clips_filter_handler(params: Tuple):
             # TODO: Pre-cache clip notes
             if len(self._clip_notes_cache) == 0:

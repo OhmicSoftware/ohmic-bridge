@@ -61,6 +61,50 @@ def _decode_arrangement_notes(reply):
     return notes
 
 
+def test_arrangement_clip_set_name_roundtrips(osc):
+    """Write arrangement_clip.name via the new set handler and verify the
+    change shows up in both the per-clip getter and the bulk track getter."""
+    CLIP_INDEX = 0
+    osc.send_message("/live/arrangement_clip/create", [TRACK_ID, 0.0, 4.0])
+    wait_one_tick()
+    try:
+        osc.send_message(
+            "/live/arrangement_clip/set/name",
+            [TRACK_ID, CLIP_INDEX, "C Maj Region"],
+        )
+        wait_one_tick()
+
+        per_clip = osc.query(
+            "/live/arrangement_clip/get/name", [TRACK_ID, CLIP_INDEX],
+        )
+        # Reply shape: (track, clip_index, name).
+        assert per_clip[-1] == "C Maj Region", (
+            "per-clip get/name did not reflect the write: %r" % (per_clip,)
+        )
+
+        bulk = osc.query(
+            "/live/track/get/arrangement_clips/name", [TRACK_ID],
+        )
+        # Reply shape: (track, name_0, name_1, ...).
+        assert "C Maj Region" in bulk[1:], (
+            "bulk track listing did not reflect the write: %r" % (bulk,)
+        )
+
+        # Rename again and verify the second write also lands (no stuck state).
+        osc.send_message(
+            "/live/arrangement_clip/set/name",
+            [TRACK_ID, CLIP_INDEX, "Db Maj Region"],
+        )
+        wait_one_tick()
+        per_clip_2 = osc.query(
+            "/live/arrangement_clip/get/name", [TRACK_ID, CLIP_INDEX],
+        )
+        assert per_clip_2[-1] == "Db Maj Region"
+    finally:
+        osc.send_message("/live/arrangement_clip/delete", [TRACK_ID, CLIP_INDEX])
+        wait_one_tick()
+
+
 def test_remove_arrangement_clip_notes(osc):
     """Create an arrangement clip, add two notes one at a time (each
     verified by read-back), remove the first by covering it with a
