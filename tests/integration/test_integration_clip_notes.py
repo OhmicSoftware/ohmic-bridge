@@ -6,7 +6,11 @@ values so a future Ableton release that changes the API signature
 or return shape will break these assertions before users hit it."""
 import pytest
 
-from tests.integration.conftest import wait_one_tick
+from tests.integration.conftest import (
+    create_temp_midi_track,
+    delete_track_by_index,
+    wait_one_tick,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -17,12 +21,31 @@ CLIP_ID = 0
 
 @pytest.fixture(autouse=True)
 def _fresh_clip(osc):
-    osc.send_message("/live/clip_slot/delete_clip", [TRACK_ID, CLIP_ID])
-    wait_one_tick()
-    osc.send_message("/live/clip_slot/create_clip", [TRACK_ID, CLIP_ID, 4.0])
-    wait_one_tick()
-    yield
-    osc.send_message("/live/clip_slot/delete_clip", [TRACK_ID, CLIP_ID])
+    global TRACK_ID
+    original_track_id = TRACK_ID
+    TRACK_ID = create_temp_midi_track(osc)
+    try:
+        osc.send_message("/live/clip_slot/create_clip", [TRACK_ID, CLIP_ID, 4.0])
+        wait_one_tick()
+        has_clip = osc.query("/live/clip_slot/get/has_clip", [TRACK_ID, CLIP_ID])
+        assert has_clip[-1] is True or has_clip[-1] == 1, (
+            "test setup failed to create MIDI clip at (%d, %d): %r"
+            % (TRACK_ID, CLIP_ID, has_clip)
+        )
+        yield
+    finally:
+        has_clip = osc.query("/live/clip_slot/get/has_clip", [TRACK_ID, CLIP_ID])
+        if has_clip[-1] is True or has_clip[-1] == 1:
+            osc.send_message("/live/clip_slot/delete_clip", [TRACK_ID, CLIP_ID])
+            wait_one_tick()
+            after_delete = osc.query(
+                "/live/clip_slot/get/has_clip", [TRACK_ID, CLIP_ID])
+            assert bool(after_delete[-1]) is False, (
+                "clip teardown failed at (%d, %d): %r"
+                % (TRACK_ID, CLIP_ID, after_delete)
+            )
+        delete_track_by_index(osc, TRACK_ID)
+        TRACK_ID = original_track_id
 
 
 def test_add_and_read_single_note_roundtrips_every_field(osc):
@@ -47,8 +70,11 @@ def test_remove_notes_by_range_preserves_other_notes(osc):
     osc.send_message("/live/clip/add/notes",
         [TRACK_ID, CLIP_ID, 62, 1.0, 1.0, 100, 0, 1.0])
     wait_one_tick()
-    osc.send_message("/live/clip/remove/notes",
+    ack = osc.query("/live/clip/remove/notes",
         [TRACK_ID, CLIP_ID, 0, 128, 1.0, 1.0])
+    assert ack == (TRACK_ID, CLIP_ID, "ok"), (
+        "remove/notes must ack (track, slot, 'ok') - got %r" % (ack,)
+    )
     wait_one_tick()
     result = osc.query("/live/clip/get/notes", [TRACK_ID, CLIP_ID])
     # Expect only the C3 note (pitch 60, start 0.0) to remain
@@ -167,9 +193,12 @@ def test_remove_notes_by_id(osc):
     # first-added note.
     removed_pitch = None
     for candidate_id in range(1, 33):
-        osc.send_message(
+        ack = osc.query(
             "/live/clip/remove_notes_by_id",
             [TRACK_ID, CLIP_ID, candidate_id],
+        )
+        assert ack == (TRACK_ID, CLIP_ID, "ok"), (
+            "remove_notes_by_id must ack (track, slot, 'ok') - got %r" % (ack,)
         )
         wait_one_tick()
         reply = osc.query("/live/clip/get/notes", [TRACK_ID, CLIP_ID])

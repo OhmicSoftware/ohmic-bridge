@@ -15,7 +15,7 @@ logger = logging.getLogger("abletonosc")
 # /live/api/ohmic/bridge_version and refuses to proceed if it is lower
 # than its MIN_BRIDGE_VERSION — prevents silent mismatches when one
 # side of the Ohmic/Bridge pair is updated without the other.
-BRIDGE_VERSION = (0, 3, 0)
+BRIDGE_VERSION = (0, 4, 0)
 
 class Manager(ControlSurface):
     def __init__(self, c_instance):

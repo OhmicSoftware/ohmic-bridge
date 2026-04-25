@@ -376,8 +376,11 @@ def test_track_delete_device_then_restore(osc):
             loaded_device_index = after_first_load.index(loaded_device_name)
 
         # Act: delete the loaded device.
-        osc.send_message(
+        ack = osc.query(
             "/live/track/delete_device", [track_idx, loaded_device_index],
+        )
+        assert ack == (track_idx, loaded_device_index, "ok"), (
+            "delete_device must ack (track, device_index, 'ok') - got %r" % (ack,)
         )
         wait_one_tick()
 

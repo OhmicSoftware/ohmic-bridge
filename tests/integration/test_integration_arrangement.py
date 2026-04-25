@@ -1,9 +1,13 @@
 """Integration tests for the arrangement_clips capability bucket.
 
 do not parallelize — all integration tests target the same Ableton
-process and share TRACK_ID = 0."""
+process."""
 import pytest
-from tests.integration.conftest import wait_one_tick
+from tests.integration.conftest import (
+    create_temp_midi_track,
+    delete_track_by_index,
+    wait_one_tick,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -14,6 +18,19 @@ TRACK_ID = 0
 # through OSC cleanly in practice, but a small epsilon keeps the match
 # robust against any future quantization Ableton might introduce.
 _START_TIME_MATCH_EPSILON = 1e-3
+
+
+@pytest.fixture(autouse=True)
+def _temp_midi_track(osc):
+    """Each arrangement test owns a MIDI track and cleans it up afterward."""
+    global TRACK_ID
+    original_track_id = TRACK_ID
+    TRACK_ID = create_temp_midi_track(osc)
+    try:
+        yield
+    finally:
+        delete_track_by_index(osc, TRACK_ID)
+        TRACK_ID = original_track_id
 
 
 def _arrangement_clips_baseline(osc):
@@ -328,9 +345,13 @@ def test_remove_arrangement_clip_notes(osc):
         # Wire: (track, clip_index, pitch_start, pitch_span, time_start, time_span).
         # pitch 60 only (span=1), beats 0.0..1.0 (span=1.0) — leaves
         # pitch 62 at time 2.0 untouched.
-        osc.send_message(
+        ack = osc.query(
             "/live/arrangement_clip/remove/notes",
             [TRACK_ID, clip_index, 60, 1, 0.0, 1.0],
+        )
+        assert ack == (TRACK_ID, clip_index, "ok"), (
+            "arrangement remove/notes must ack (track, clip_index, 'ok') - got %r"
+            % (ack,)
         )
         wait_one_tick()
 

@@ -30,7 +30,6 @@ class TrackHandler(AbletonOSCHandler):
             return track_callback
 
         methods = [
-            "delete_device",
             "stop_all_clips"
         ]
         properties_r = [
@@ -101,6 +100,15 @@ class TrackHandler(AbletonOSCHandler):
 
         self.osc_server.add_handler("/live/track/get/send", create_track_callback(track_get_send))
         self.osc_server.add_handler("/live/track/set/send", create_track_callback(track_set_send))
+
+        @guarded_lom("track_delete_device")
+        def track_delete_device(track, params: Tuple[Any] = ()):
+            device_index, = params
+            device_index = int(device_index)
+            track.delete_device(device_index)
+            return (device_index, "ok")
+
+        self.osc_server.add_handler("/live/track/delete_device", create_track_callback(track_delete_device))
 
         def track_delete_clip(track, params: Tuple[Any]):
             clip_index, = params

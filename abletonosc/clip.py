@@ -182,13 +182,13 @@ class ClipHandler(AbletonOSCHandler):
             clip.remove_notes_extended(
                 pitch_start, pitch_span, time_start, time_span
             )
-            return None
+            return ("ok",)
 
         @guarded_lom("clip_remove_notes_by_id")
         def clip_remove_notes_by_id(clip, params: Tuple[Any] = ()):
             note_ids = params  # variadic
             clip.remove_notes_by_id(note_ids)
-            return None
+            return ("ok",)
 
         self.osc_server.add_handler("/live/clip/get/notes", create_clip_callback(clip_get_notes))
         self.osc_server.add_handler("/live/clip/add/notes", create_clip_callback(clip_add_notes))
@@ -444,7 +444,7 @@ class ClipHandler(AbletonOSCHandler):
             clip.remove_notes_extended(
                 pitch_start, pitch_span, time_start, time_span
             )
-            return None
+            return ("ok",)
 
         self.osc_server.add_handler("/live/arrangement_clip/remove/notes", create_arrangement_clip_callback(arrangement_clip_remove_notes))
 

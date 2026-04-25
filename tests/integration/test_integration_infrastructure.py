@@ -60,8 +60,8 @@ def test_bridge_version_reply(osc):
     assert isinstance(major, int) and isinstance(minor, int) and isinstance(patch, int), (
         "every version component must be an int — got %r" % (reply,)
     )
-    assert (major, minor, patch) >= (0, 3, 0), (
-        "bridge version must be >= (0, 3, 0) — got %r" % (reply,)
+    assert (major, minor, patch) >= (0, 4, 0), (
+        "bridge version must be >= (0, 4, 0) — got %r" % (reply,)
     )
 
 

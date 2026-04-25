@@ -125,3 +125,4 @@ Record wall-clock time after each pass so growth is visible. Fail the run in rev
 | 2026-04-18 | +Pass 2 (transport/track) | 39 passed, 5 skipped | 19.6s |
 | 2026-04-18 | +Pass 3 (clip/slot/scene/view/device) | 53 passed, 6 skipped | 34.2s |
 | 2026-04-18 | +rewrite 5 skip-prone tests to own state | 58 passed, 0 skipped | 40.6s |
+| 2026-04-25 | destructive ack + Bridge 0.4.0 focused verification | 17 passed, 2 skipped | 21.65s |
