@@ -2,12 +2,10 @@
 
 Covers name/color/length/looping/loop_start/loop_end/is_playing.
 Every setter paired with a getter that verifies the write landed.
-Autouse fixture creates a fresh 4-beat MIDI clip at (TRACK_ID, CLIP_ID)
-before each test and deletes it after — mirrors the _fresh_clip
-fixture in test_integration_clip_notes.py.
+The temp_midi_clip fixture creates a fresh 4-beat MIDI clip on a
+disposable MIDI track before each test and deletes the track after.
 
-do not parallelize — these tests mutate the clip at (0, 0). Running
-alongside any other test that touches that slot will thrash state.
+do not parallelize — these tests mutate Live clip state.
 """
 import pytest
 
@@ -16,35 +14,19 @@ from tests.integration.conftest import wait_one_tick
 pytestmark = pytest.mark.integration
 
 
-TRACK_ID = 0
-CLIP_ID = 0
 CLIP_LENGTH_BEATS = 4.0
-
-
-@pytest.fixture(autouse=True)
-def _fresh_clip(osc):
-    """Guarantee a clean 4-beat MIDI clip at (TRACK_ID, CLIP_ID) before
-    each test, and delete it after. Mirrors test_integration_clip_notes.py."""
-    osc.send_message("/live/clip_slot/delete_clip", [TRACK_ID, CLIP_ID])
-    wait_one_tick()
-    osc.send_message(
-        "/live/clip_slot/create_clip",
-        [TRACK_ID, CLIP_ID, CLIP_LENGTH_BEATS],
-    )
-    wait_one_tick()
-    yield
-    osc.send_message("/live/clip_slot/delete_clip", [TRACK_ID, CLIP_ID])
 
 
 # --------------------------------------------------------------------------
 # Clip name
 # --------------------------------------------------------------------------
-def test_clip_name_roundtrip(osc):
+def test_clip_name_roundtrip(osc, temp_midi_clip):
     """Save clip name, set to a distinctive sentinel, verify via
     read-back, restore, verify restore. Wire format for both get and
     set is (track, slot, value). A freshly-created clip has name == ''.
     """
-    probe = osc.query("/live/clip/get/name", [TRACK_ID, CLIP_ID])
+    track_id, clip_id = temp_midi_clip
+    probe = osc.query("/live/clip/get/name", [track_id, clip_id])
     assert len(probe) >= 3, "clip name read was incomplete: %r" % (probe,)
     original = str(probe[2])
 
@@ -52,20 +34,20 @@ def test_clip_name_roundtrip(osc):
 
     try:
         osc.send_message(
-            "/live/clip/set/name", [TRACK_ID, CLIP_ID, sentinel],
+            "/live/clip/set/name", [track_id, clip_id, sentinel],
         )
         wait_one_tick()
-        after_set = osc.query("/live/clip/get/name", [TRACK_ID, CLIP_ID])
+        after_set = osc.query("/live/clip/get/name", [track_id, clip_id])
         assert str(after_set[2]) == sentinel, (
             "clip name set did not land — expected %r, got %r"
             % (sentinel, after_set)
         )
     finally:
         osc.send_message(
-            "/live/clip/set/name", [TRACK_ID, CLIP_ID, original],
+            "/live/clip/set/name", [track_id, clip_id, original],
         )
         wait_one_tick()
-        restored = osc.query("/live/clip/get/name", [TRACK_ID, CLIP_ID])
+        restored = osc.query("/live/clip/get/name", [track_id, clip_id])
         assert str(restored[2]) == original, (
             "clip name restore failed — expected %r, got %r"
             % (original, restored)
@@ -75,7 +57,7 @@ def test_clip_name_roundtrip(osc):
 # --------------------------------------------------------------------------
 # Clip color
 # --------------------------------------------------------------------------
-def test_clip_color_roundtrip(osc):
+def test_clip_color_roundtrip(osc, temp_midi_clip):
     """Save clip color, set to a distinctive RGB integer, verify via
     read-back, restore, verify restore.
 
@@ -91,7 +73,8 @@ def test_clip_color_roundtrip(osc):
     us write arbitrary RGB without palette snapping, we can tighten
     this assertion.
     """
-    probe = osc.query("/live/clip/get/color", [TRACK_ID, CLIP_ID])
+    track_id, clip_id = temp_midi_clip
+    probe = osc.query("/live/clip/get/color", [track_id, clip_id])
     assert len(probe) >= 3, "clip color read was incomplete: %r" % (probe,)
     original = int(probe[2])
 
@@ -103,10 +86,10 @@ def test_clip_color_roundtrip(osc):
 
     try:
         osc.send_message(
-            "/live/clip/set/color", [TRACK_ID, CLIP_ID, sentinel],
+            "/live/clip/set/color", [track_id, clip_id, sentinel],
         )
         wait_one_tick()
-        after_set = osc.query("/live/clip/get/color", [TRACK_ID, CLIP_ID])
+        after_set = osc.query("/live/clip/get/color", [track_id, clip_id])
         assert len(after_set) >= 3, (
             "clip color read after set was incomplete: %r" % (after_set,)
         )
@@ -130,10 +113,10 @@ def test_clip_color_roundtrip(osc):
         )
     finally:
         osc.send_message(
-            "/live/clip/set/color", [TRACK_ID, CLIP_ID, original],
+            "/live/clip/set/color", [track_id, clip_id, original],
         )
         wait_one_tick()
-        restored = osc.query("/live/clip/get/color", [TRACK_ID, CLIP_ID])
+        restored = osc.query("/live/clip/get/color", [track_id, clip_id])
         assert int(restored[2]) == original, (
             "clip color restore failed — expected %r, got %r"
             % (original, restored)
@@ -143,14 +126,15 @@ def test_clip_color_roundtrip(osc):
 # --------------------------------------------------------------------------
 # Clip length (read-only — Live sets length at creation time)
 # --------------------------------------------------------------------------
-def test_clip_length_read(osc):
+def test_clip_length_read(osc, temp_midi_clip):
     """/live/clip/get/length returns the clip's length in beats.
     The autouse fixture created the clip with length == 4.0, so the
     read-back must equal that value."""
-    reply = osc.query("/live/clip/get/length", [TRACK_ID, CLIP_ID])
+    track_id, clip_id = temp_midi_clip
+    reply = osc.query("/live/clip/get/length", [track_id, clip_id])
     assert len(reply) >= 3, "clip length reply was incomplete: %r" % (reply,)
-    assert int(reply[0]) == TRACK_ID
-    assert int(reply[1]) == CLIP_ID
+    assert int(reply[0]) == track_id
+    assert int(reply[1]) == clip_id
     assert float(reply[2]) == pytest.approx(CLIP_LENGTH_BEATS), (
         "clip length must equal the length passed at creation "
         "(%.1f) — got %r" % (CLIP_LENGTH_BEATS, reply)
@@ -160,13 +144,14 @@ def test_clip_length_read(osc):
 # --------------------------------------------------------------------------
 # Clip looping
 # --------------------------------------------------------------------------
-def test_clip_looping_roundtrip(osc):
+def test_clip_looping_roundtrip(osc, temp_midi_clip):
     """Save looping state, flip True, verify, flip False, verify,
     restore. Three verified writes. Wire format: (track, slot, bool).
     A freshly-created MIDI clip has looping=True by default but we
     save-and-restore anyway so the test doesn't depend on that
     default."""
-    probe = osc.query("/live/clip/get/looping", [TRACK_ID, CLIP_ID])
+    track_id, clip_id = temp_midi_clip
+    probe = osc.query("/live/clip/get/looping", [track_id, clip_id])
     assert len(probe) >= 3, (
         "clip looping read was incomplete: %r" % (probe,)
     )
@@ -174,28 +159,28 @@ def test_clip_looping_roundtrip(osc):
 
     try:
         osc.send_message(
-            "/live/clip/set/looping", [TRACK_ID, CLIP_ID, True],
+            "/live/clip/set/looping", [track_id, clip_id, True],
         )
         wait_one_tick()
-        after_true = osc.query("/live/clip/get/looping", [TRACK_ID, CLIP_ID])
+        after_true = osc.query("/live/clip/get/looping", [track_id, clip_id])
         assert bool(after_true[2]) is True, (
             "looping=True did not land — got %r" % (after_true,)
         )
 
         osc.send_message(
-            "/live/clip/set/looping", [TRACK_ID, CLIP_ID, False],
+            "/live/clip/set/looping", [track_id, clip_id, False],
         )
         wait_one_tick()
-        after_false = osc.query("/live/clip/get/looping", [TRACK_ID, CLIP_ID])
+        after_false = osc.query("/live/clip/get/looping", [track_id, clip_id])
         assert bool(after_false[2]) is False, (
             "looping=False did not land — got %r" % (after_false,)
         )
     finally:
         osc.send_message(
-            "/live/clip/set/looping", [TRACK_ID, CLIP_ID, original],
+            "/live/clip/set/looping", [track_id, clip_id, original],
         )
         wait_one_tick()
-        restored = osc.query("/live/clip/get/looping", [TRACK_ID, CLIP_ID])
+        restored = osc.query("/live/clip/get/looping", [track_id, clip_id])
         assert bool(restored[2]) is original, (
             "looping restore failed — expected %r, got %r"
             % (original, restored)
@@ -205,15 +190,16 @@ def test_clip_looping_roundtrip(osc):
 # --------------------------------------------------------------------------
 # Loop start / loop end (read-only for this test)
 # --------------------------------------------------------------------------
-def test_clip_loop_start_and_loop_end_read(osc):
+def test_clip_loop_start_and_loop_end_read(osc, temp_midi_clip):
     """Read /live/clip/get/loop_start and /live/clip/get/loop_end.
     For a freshly-created 4-beat clip, loop_start should be < loop_end
     (Live initializes loop bounds to cover the whole clip)."""
+    track_id, clip_id = temp_midi_clip
     start_reply = osc.query(
-        "/live/clip/get/loop_start", [TRACK_ID, CLIP_ID],
+        "/live/clip/get/loop_start", [track_id, clip_id],
     )
     end_reply = osc.query(
-        "/live/clip/get/loop_end", [TRACK_ID, CLIP_ID],
+        "/live/clip/get/loop_end", [track_id, clip_id],
     )
     assert len(start_reply) >= 3, (
         "loop_start reply was incomplete: %r" % (start_reply,)
@@ -243,12 +229,13 @@ def test_clip_loop_start_and_loop_end_read(osc):
 # --------------------------------------------------------------------------
 # Clip is_playing (quiescent read)
 # --------------------------------------------------------------------------
-def test_clip_is_playing_read_when_quiescent(osc):
+def test_clip_is_playing_read_when_quiescent(osc, temp_midi_clip):
     """A just-created clip has not been fired, so is_playing must be
     False. Wire format: (track, slot, bool). This is the read-only
     companion to the clip_slot fire/stop tests in
     test_integration_clip_slot.py, which exercise the True path."""
-    reply = osc.query("/live/clip/get/is_playing", [TRACK_ID, CLIP_ID])
+    track_id, clip_id = temp_midi_clip
+    reply = osc.query("/live/clip/get/is_playing", [track_id, clip_id])
     assert len(reply) >= 3, (
         "clip is_playing reply was incomplete: %r" % (reply,)
     )

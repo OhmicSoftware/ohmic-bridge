@@ -1,15 +1,14 @@
 """Integration tests for track property endpoints.
 
 Covers name/mute round-trip, has_midi_input, devices/name, delete_device,
-and track.stop_all_clips. All tests target TRACK_ID = 0 which must be a
-MIDI track in the test project — skip cleanly if not.
+and track.stop_all_clips. Tests create disposable MIDI tracks instead of
+depending on the user's project layout.
 
 Device loading is done via /live/browser/load, covered by
 test_integration_browser.py::test_browser_load_instrument_then_read_back.
 
-do not parallelize — these tests mutate track 0's name, mute state,
-and device chain. Running them alongside other track-touching tests
-will thrash shared state.
+do not parallelize — these tests mutate Live track, clip, transport,
+and device-chain state.
 """
 import pytest
 
@@ -22,49 +21,30 @@ from tests.integration.conftest import (
 
 pytestmark = pytest.mark.integration
 
-TRACK_ID = 0
-
-
-def _require_midi_track_0(osc):
-    """Skip the test if track 0 is not a MIDI track (most endpoints
-    under test here assume a MIDI track). Not a Bridge failure —
-    project-setup precondition."""
-    has_midi = osc.query("/live/track/get/has_midi_input", [TRACK_ID])
-    # Wire format: (track_id, bool).
-    if not (len(has_midi) >= 2 and bool(has_midi[1])):
-        pytest.skip(
-            "track %d is not a MIDI track in the current project — "
-            "the track-property integration suite expects track 0 to "
-            "be MIDI. Move a MIDI track to index 0 and re-run."
-            % TRACK_ID
-        )
-
-
 # --------------------------------------------------------------------------
 # Track name round-trip
 # --------------------------------------------------------------------------
-def test_track_name_roundtrip(osc):
+def test_track_name_roundtrip(osc, temp_midi_track):
     """Save track name, set to a distinctive sentinel, verify via
     read-back, restore, verify restore."""
-    _require_midi_track_0(osc)
-
-    probe = osc.query("/live/track/get/name", [TRACK_ID])
+    track_id = temp_midi_track
+    probe = osc.query("/live/track/get/name", [track_id])
     assert len(probe) >= 2, "track name read was incomplete: %r" % (probe,)
     original = str(probe[1])
     sentinel = "__Integration Test Track__"
 
     try:
-        osc.send_message("/live/track/set/name", [TRACK_ID, sentinel])
+        osc.send_message("/live/track/set/name", [track_id, sentinel])
         wait_one_tick()
-        after_set = osc.query("/live/track/get/name", [TRACK_ID])
+        after_set = osc.query("/live/track/get/name", [track_id])
         assert str(after_set[1]) == sentinel, (
             "track name set did not land — expected %r, got %r"
             % (sentinel, after_set)
         )
     finally:
-        osc.send_message("/live/track/set/name", [TRACK_ID, original])
+        osc.send_message("/live/track/set/name", [track_id, original])
         wait_one_tick()
-        restored = osc.query("/live/track/get/name", [TRACK_ID])
+        restored = osc.query("/live/track/get/name", [track_id])
         assert str(restored[1]) == original, (
             "track name restore failed — expected %r, got %r"
             % (original, restored)
@@ -74,35 +54,34 @@ def test_track_name_roundtrip(osc):
 # --------------------------------------------------------------------------
 # Track mute round-trip
 # --------------------------------------------------------------------------
-def test_track_mute_roundtrip(osc):
+def test_track_mute_roundtrip(osc, temp_midi_track):
     """Save mute state, flip to True, verify, flip to False, verify,
     restore to original, verify. Three verified writes."""
-    _require_midi_track_0(osc)
-
-    probe = osc.query("/live/track/get/mute", [TRACK_ID])
+    track_id = temp_midi_track
+    probe = osc.query("/live/track/get/mute", [track_id])
     assert len(probe) >= 2, "track mute read was incomplete: %r" % (probe,)
     # Live returns bools; some OSC wire encodings surface them as 0/1.
     # Normalize to bool for comparison.
     original = bool(probe[1])
 
     try:
-        osc.send_message("/live/track/set/mute", [TRACK_ID, True])
+        osc.send_message("/live/track/set/mute", [track_id, True])
         wait_one_tick()
-        after_true = osc.query("/live/track/get/mute", [TRACK_ID])
+        after_true = osc.query("/live/track/get/mute", [track_id])
         assert bool(after_true[1]) is True, (
             "mute=True did not land — got %r" % (after_true,)
         )
 
-        osc.send_message("/live/track/set/mute", [TRACK_ID, False])
+        osc.send_message("/live/track/set/mute", [track_id, False])
         wait_one_tick()
-        after_false = osc.query("/live/track/get/mute", [TRACK_ID])
+        after_false = osc.query("/live/track/get/mute", [track_id])
         assert bool(after_false[1]) is False, (
             "mute=False did not land — got %r" % (after_false,)
         )
     finally:
-        osc.send_message("/live/track/set/mute", [TRACK_ID, original])
+        osc.send_message("/live/track/set/mute", [track_id, original])
         wait_one_tick()
-        restored = osc.query("/live/track/get/mute", [TRACK_ID])
+        restored = osc.query("/live/track/get/mute", [track_id])
         assert bool(restored[1]) is original, (
             "mute restore failed — expected %r, got %r"
             % (original, restored)
@@ -112,14 +91,15 @@ def test_track_mute_roundtrip(osc):
 # --------------------------------------------------------------------------
 # Read-only track properties
 # --------------------------------------------------------------------------
-def test_track_has_midi_input_read(osc):
+def test_track_has_midi_input_read(osc, temp_midi_track):
     """/live/track/get/has_midi_input returns (track_id, bool). Pure
     read; no mutation."""
-    reply = osc.query("/live/track/get/has_midi_input", [TRACK_ID])
+    track_id = temp_midi_track
+    reply = osc.query("/live/track/get/has_midi_input", [track_id])
     assert len(reply) >= 2, (
         "has_midi_input reply was incomplete: %r" % (reply,)
     )
-    assert int(reply[0]) == TRACK_ID
+    assert int(reply[0]) == track_id
     # Live returns a native bool, but some encodings surface 0/1 ints.
     assert isinstance(reply[1], (bool, int)), (
         "has_midi_input value must be bool/int — got %r (type %s)"
@@ -127,15 +107,16 @@ def test_track_has_midi_input_read(osc):
     )
 
 
-def test_track_devices_name_read(osc):
+def test_track_devices_name_read(osc, temp_midi_track):
     """/live/track/get/devices/name returns (track_id, name_0, ...).
     On a track with no devices, the tuple is length 1 (just track_id).
     """
-    reply = osc.query("/live/track/get/devices/name", [TRACK_ID])
+    track_id = temp_midi_track
+    reply = osc.query("/live/track/get/devices/name", [track_id])
     assert len(reply) >= 1, (
         "devices/name reply was empty: %r" % (reply,)
     )
-    assert int(reply[0]) == TRACK_ID, (
+    assert int(reply[0]) == track_id, (
         "first element must be the track id — got %r" % (reply,)
     )
     # Every remaining element must be a string (device name).

@@ -173,6 +173,42 @@ def delete_track_by_index(osc, track_index):
     )
 
 
+@pytest.fixture
+def temp_midi_track(osc):
+    """Create a disposable MIDI track for one test and delete it after."""
+    track_index = create_temp_midi_track(osc)
+    try:
+        yield track_index
+    finally:
+        delete_track_by_index(osc, track_index)
+
+
+@pytest.fixture
+def temp_midi_clip(osc, temp_midi_track):
+    """Create a disposable 4-beat clip in slot 0 of a temp MIDI track."""
+    slot_index = 0
+    clip_length = 4.0
+    osc.send_message(
+        "/live/clip_slot/create_clip",
+        [temp_midi_track, slot_index, clip_length],
+    )
+    wait_one_tick()
+    has_clip = osc.query(
+        "/live/clip_slot/get/has_clip", [temp_midi_track, slot_index],
+    )
+    assert len(has_clip) >= 3 and bool(has_clip[2]) is True, (
+        "temp_midi_clip did not create clip at (%d, %d): %r"
+        % (temp_midi_track, slot_index, has_clip)
+    )
+    try:
+        yield temp_midi_track, slot_index
+    finally:
+        osc.send_message(
+            "/live/clip_slot/delete_clip", [temp_midi_track, slot_index],
+        )
+        wait_one_tick()
+
+
 # Stock Ableton instruments we'll attempt to load in priority order.
 # Operator ships with Live Suite, but Live Intro / Standard licenses
 # don't include it — so we fall back through the list and, if none
