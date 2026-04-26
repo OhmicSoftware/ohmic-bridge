@@ -28,3 +28,22 @@ def test_track_property_tests_do_not_require_project_track_zero_midi():
     assert "_require_midi_track_0" not in src
     assert "TRACK_ID = 0" not in src
 
+
+def test_default_collection_ignores_legacy_live_smoke_tests():
+    """Legacy root-level live tests require Ableton and are superseded
+    by tests/integration. They must stay out of default unit collection
+    so `python -m pytest` remains a real unit-test gate."""
+    import conftest
+
+    ignored = {Path(path).name for path in conftest.collect_ignore}
+
+    assert ignored >= {
+        "test_application.py",
+        "test_bundle.py",
+        "test_clip.py",
+        "test_clip_slot.py",
+        "test_song.py",
+        "test_track.py",
+        "test_view.py",
+    }
+

@@ -11,21 +11,25 @@ PACKAGE_NAME = "Ohmic_Bridge"
 
 
 def _stub_ableton_modules():
-    if "ableton" not in sys.modules:
-        ableton = types.ModuleType("ableton")
-        ableton.v2 = types.ModuleType("ableton.v2")
-        ableton.v2.control_surface = types.ModuleType("ableton.v2.control_surface")
-        ableton.v2.control_surface.component = types.ModuleType(
-            "ableton.v2.control_surface.component"
-        )
-        ableton.v2.control_surface.component.Component = type("Component", (), {})
-        ableton.v2.control_surface.ControlSurface = type("ControlSurface", (), {})
-        sys.modules["ableton"] = ableton
-        sys.modules["ableton.v2"] = ableton.v2
-        sys.modules["ableton.v2.control_surface"] = ableton.v2.control_surface
-        sys.modules["ableton.v2.control_surface.component"] = (
-            ableton.v2.control_surface.component
-        )
+    ableton = sys.modules.setdefault("ableton", types.ModuleType("ableton"))
+    v2 = sys.modules.setdefault("ableton.v2", types.ModuleType("ableton.v2"))
+    control_surface = sys.modules.setdefault(
+        "ableton.v2.control_surface",
+        types.ModuleType("ableton.v2.control_surface"),
+    )
+    component = sys.modules.setdefault(
+        "ableton.v2.control_surface.component",
+        types.ModuleType("ableton.v2.control_surface.component"),
+    )
+    ableton.v2 = v2
+    v2.control_surface = control_surface
+    control_surface.component = component
+    component.Component = getattr(component, "Component", type("Component", (), {}))
+    control_surface.ControlSurface = getattr(
+        control_surface,
+        "ControlSurface",
+        type("ControlSurface", (), {}),
+    )
 
     if "_Framework" not in sys.modules:
         framework = types.ModuleType("_Framework")
@@ -76,6 +80,39 @@ def _fresh_track_module():
 def test_bridge_version_is_0_4_0():
     manager = _fresh_manager_module()
     assert manager.BRIDGE_VERSION == (0, 4, 0)
+
+
+def test_ableton_stub_repairs_existing_incomplete_control_surface_module():
+    saved = {
+        name: sys.modules.get(name)
+        for name in (
+            "ableton",
+            "ableton.v2",
+            "ableton.v2.control_surface",
+            "ableton.v2.control_surface.component",
+        )
+    }
+    try:
+        ableton = types.ModuleType("ableton")
+        ableton.v2 = types.ModuleType("ableton.v2")
+        ableton.v2.control_surface = types.ModuleType("ableton.v2.control_surface")
+        sys.modules["ableton"] = ableton
+        sys.modules["ableton.v2"] = ableton.v2
+        sys.modules["ableton.v2.control_surface"] = ableton.v2.control_surface
+
+        _stub_ableton_modules()
+
+        assert hasattr(sys.modules["ableton.v2.control_surface"], "ControlSurface")
+        assert hasattr(
+            sys.modules["ableton.v2.control_surface.component"],
+            "Component",
+        )
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
 
 
 def test_clip_remove_notes_handler_returns_ok_ack():

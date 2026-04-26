@@ -23,6 +23,19 @@ _bridge_root = os.path.dirname(os.path.abspath(__file__))
 if _bridge_root not in sys.path:
     sys.path.insert(0, _bridge_root)
 
+collect_ignore = [
+    os.path.join("tests", name)
+    for name in (
+        "test_application.py",
+        "test_bundle.py",
+        "test_clip.py",
+        "test_clip_slot.py",
+        "test_song.py",
+        "test_track.py",
+        "test_view.py",
+    )
+]
+
 # Pre-register an empty `tests` package so pytest does not execute
 # the real tests/__init__.py during collection. Unit tests do not
 # depend on its contents.
