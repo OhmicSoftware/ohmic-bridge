@@ -15,12 +15,52 @@ from tests.integration.conftest import (
 
 pytestmark = pytest.mark.integration
 
+USER_LIBRARY_CATEGORY_SUFFIXES = {
+    "instrument_racks": (".adg",),
+    "drum_racks": (".adg",),
+    "audio_effect_racks": (".adg",),
+    "midi_effect_racks": (".adg",),
+    "ableton_presets": (".adv",),
+    "plugin_presets": (".vstpreset", ".aupreset"),
+    "max_for_live": (".amxd",),
+}
+
+RACK_CATEGORY_PATH_PARTS = {
+    "instrument_racks": "instrument rack",
+    "drum_racks": "drum rack",
+    "audio_effect_racks": "audio effect rack",
+    "midi_effect_racks": "midi effect rack",
+}
+
+LEGACY_BROWSER_CATEGORIES = {
+    "audio_effects",
+    "midi_effects",
+    "user_library",
+    "presets",
+}
+
 
 # Browser-load tests create their own empty MIDI track at the tail end
 # of the session so we never replace an existing instrument on the
 # user's project. Ableton's browser.load_item replaces the currently
 # loaded instrument when the selected track already has one — on an
 # empty track it appends, which is the behavior we want to verify.
+
+
+def _browser_capabilities(osc):
+    return tuple(str(category) for category in osc.query(
+        "/live/browser/get/capabilities", []
+    ))
+
+
+def _loadable_items(reply):
+    if len(reply) < 2 or reply[1] == "empty":
+        return []
+    return [
+        str(item)
+        for item in reply[1:]
+        if not str(item).startswith("TRUNCATED:")
+    ]
 
 
 def test_browser_capabilities_returnable(osc):
@@ -32,8 +72,16 @@ def test_browser_capabilities_returnable(osc):
     known strings — no mixed types, no trailing integers."""
     reply = osc.query("/live/browser/get/capabilities", [])
     allowed = {
-        "instruments", "audio_effects", "midi_effects",
-        "plugins", "user_library", "presets", "unsupported",
+        "instruments",
+        "plugins",
+        "instrument_racks",
+        "drum_racks",
+        "audio_effect_racks",
+        "midi_effect_racks",
+        "ableton_presets",
+        "plugin_presets",
+        "max_for_live",
+        "unsupported",
     }
     assert len(reply) >= 1, "capabilities reply was empty"
     for category in reply:
@@ -44,6 +92,88 @@ def test_browser_capabilities_returnable(osc):
             "unknown category %r in %r — update the allow-list if the "
             "Bridge added a new category" % (category, reply)
         )
+
+
+def test_browser_capabilities_do_not_return_legacy_categories(osc):
+    reply = _browser_capabilities(osc)
+    assert not LEGACY_BROWSER_CATEGORIES.intersection(reply), (
+        "Bridge returned legacy browser categories %r in %r. Ableton may "
+        "still be running an old Ohmic_Bridge install."
+        % (LEGACY_BROWSER_CATEGORIES.intersection(reply), reply)
+    )
+
+
+def test_browser_get_names_accepts_every_supported_category(osc):
+    capabilities = _browser_capabilities(osc)
+    assert capabilities != ("unsupported",)
+    for category in capabilities:
+        reply = osc.query("/live/browser/get/names", [category])
+        assert len(reply) >= 1, (
+            "get/names for %r returned empty reply" % (category,)
+        )
+        assert reply[0] == category, (
+            "get/names did not echo category %r: %r" % (category, reply)
+        )
+        assert not str(reply[0]).startswith("error:"), (
+            "get/names for %r returned error: %r" % (category, reply)
+        )
+
+
+def test_browser_search_accepts_every_supported_category(osc):
+    capabilities = _browser_capabilities(osc)
+    assert capabilities != ("unsupported",)
+    for category in capabilities:
+        reply = osc.query("/live/browser/search", [category, ""])
+        assert len(reply) >= 3, (
+            "search for %r returned too-short reply: %r" % (category, reply)
+        )
+        assert reply[0] == category
+        assert reply[1] == ""
+        assert not str(reply[2]).startswith("error:"), (
+            "search for %r returned error: %r" % (category, reply)
+        )
+
+
+def test_legacy_browser_categories_are_rejected(osc):
+    for category in sorted(LEGACY_BROWSER_CATEGORIES):
+        names_reply = osc.query("/live/browser/get/names", [category])
+        assert names_reply == ("error: unknown category '%s'" % category,), (
+            "legacy get/names category %r should be rejected, got %r"
+            % (category, names_reply)
+        )
+        search_reply = osc.query("/live/browser/search", [category, ""])
+        assert search_reply == ("error: unknown category '%s'" % category,), (
+            "legacy search category %r should be rejected, got %r"
+            % (category, search_reply)
+        )
+
+
+def test_user_library_categories_only_return_matching_paths(osc):
+    capabilities = set(_browser_capabilities(osc))
+    supported_categories = sorted(
+        set(USER_LIBRARY_CATEGORY_SUFFIXES).intersection(capabilities)
+    )
+    assert supported_categories, (
+        "no User Library-backed browser categories were supported: %r"
+        % (capabilities,)
+    )
+
+    for category in supported_categories:
+        reply = osc.query("/live/browser/get/names", [category])
+        assert len(reply) >= 1 and reply[0] == category
+        for item in _loadable_items(reply):
+            lowered = item.lower()
+            assert lowered.endswith(USER_LIBRARY_CATEGORY_SUFFIXES[category]), (
+                "item %r in %s does not match expected suffixes %r"
+                % (item, category, USER_LIBRARY_CATEGORY_SUFFIXES[category])
+            )
+            required_part = RACK_CATEGORY_PATH_PARTS.get(category)
+            if required_part is not None:
+                parts = [part.strip().lower() for part in item.split("/")]
+                assert required_part in parts, (
+                    "rack item %r in %s does not contain required path part %r"
+                    % (item, category, required_part)
+                )
 
 
 def test_browser_get_names_for_instruments(osc):

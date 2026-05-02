@@ -9,21 +9,45 @@ logger = logging.getLogger("abletonosc")
 # Only categories where hasattr(browser, name) is True will be reported as supported.
 CATEGORY_MAP = {
     "instruments": "instruments",
-    "audio_effects": "audio_effects",
-    "midi_effects": "midi_effects",
     "plugins": "plugins",
-    "user_library": "user_library",
-    "presets": "user_library",
+    "instrument_racks": "user_library",
+    "drum_racks": "user_library",
+    "audio_effect_racks": "user_library",
+    "midi_effect_racks": "user_library",
+    "ableton_presets": "user_library",
+    "plugin_presets": "user_library",
+    "max_for_live": "user_library",
 }
 
-# Extension filters per category.  Tuple of lowercase suffixes to match.
-# user_library → .adg (racks), presets → .adv (native) + .vstpreset (VST3).
-_EXT_FILTERS = {
-    "user_library": (".adg",),
-    "presets": (".adv", ".vstpreset", ".aupreset"),
+USER_LIBRARY_CATEGORIES = {
+    "instrument_racks",
+    "drum_racks",
+    "audio_effect_racks",
+    "midi_effect_racks",
+    "ableton_presets",
+    "plugin_presets",
+    "max_for_live",
 }
 
-MAX_DEPTH = 3
+PRESET_CATEGORIES = {"ableton_presets", "plugin_presets"}
+MAX_FOR_LIVE_UNSUPPORTED_ERROR = "error: Max for Live is not supported by this Ableton Live edition/session"
+
+
+def _is_preset_category(category):
+    return category in PRESET_CATEGORIES
+
+
+def _max_for_live_supported(browser):
+    return hasattr(browser, "max_for_live")
+
+
+def _max_for_live_unsupported_error(category, browser):
+    if category == "max_for_live" and not _max_for_live_supported(browser):
+        return (MAX_FOR_LIVE_UNSUPPORTED_ERROR,)
+    return None
+
+
+MAX_DEPTH = 5
 MAX_RESULTS = 500
 
 
@@ -49,7 +73,53 @@ def _get_children(item):
     return []
 
 
-def _collect_loadable(root, prefix, depth, results, ext_filter=None):
+def _normalise_browser_path(path):
+    return str(path).replace("\\", "/").strip()
+
+
+def _path_parts(path):
+    return [
+        part.strip().lower()
+        for part in _normalise_browser_path(path).split("/")
+        if part.strip()
+    ]
+
+
+def _category_for_user_library_path(path):
+    text = _normalise_browser_path(path)
+    lowered = text.lower()
+    parts = _path_parts(text)
+
+    if lowered.endswith(".adg"):
+        if "instrument rack" in parts:
+            return "instrument_racks"
+        if "drum rack" in parts:
+            return "drum_racks"
+        if "audio effect rack" in parts:
+            return "audio_effect_racks"
+        if "midi effect rack" in parts:
+            return "midi_effect_racks"
+        return None
+
+    if lowered.endswith(".adv"):
+        return "ableton_presets"
+
+    if lowered.endswith((".vstpreset", ".aupreset")):
+        return "plugin_presets"
+
+    if lowered.endswith(".amxd"):
+        return "max_for_live"
+
+    return None
+
+
+def _path_matches_category(path, category):
+    if category not in USER_LIBRARY_CATEGORIES:
+        return True
+    return _category_for_user_library_path(path) == category
+
+
+def _collect_loadable(root, prefix, depth, results, category=None):
     """Recursively collect loadable items from a browser tree node.
 
     Args:
@@ -57,9 +127,7 @@ def _collect_loadable(root, prefix, depth, results, ext_filter=None):
         prefix: Path prefix built from parent names (e.g. "Wavetable").
         depth: Current recursion depth.
         results: List to append "parent/child" path strings into.
-        ext_filter: If set, only include items whose name ends with one of
-                    these extensions.  Accepts a string or tuple of strings
-                    (e.g. (".adv", ".vstpreset")).
+        category: Category key used to classify user library paths.
     """
     if depth > MAX_DEPTH:
         return
@@ -71,16 +139,17 @@ def _collect_loadable(root, prefix, depth, results, ext_filter=None):
             continue
         path = "%s/%s" % (prefix, name) if prefix else name
         try:
-            if child.is_loadable:
-                if ext_filter is None or name.lower().endswith(ext_filter):
-                    results.append(path)
+            is_loadable = child.is_loadable
         except Exception:
-            pass
+            is_loadable = False
+        if is_loadable and _path_matches_category(path, category):
+            results.append(path)
         try:
-            if child.is_folder:
-                _collect_loadable(child, path, depth + 1, results, ext_filter)
+            is_folder = child.is_folder
         except Exception:
-            pass
+            is_folder = False
+        if is_folder:
+            _collect_loadable(child, path, depth + 1, results, category)
 
 
 def _find_by_path(root, segments):
@@ -150,6 +219,65 @@ def _find_by_name(root, name, depth):
     return None
 
 
+def _find_by_path_with_path(root, segments, prefix=""):
+    children = _get_children(root)
+    if not segments:
+        return None, ""
+    for child in children:
+        try:
+            child_name = child.name
+        except Exception:
+            continue
+        path = "%s/%s" % (prefix, child_name) if prefix else child_name
+        if child_name == segments[0]:
+            if len(segments) == 1:
+                return child, path
+            return _find_by_path_with_path(child, segments[1:], path)
+    return None, ""
+
+
+def _find_by_name_with_path(root, name, depth, prefix="", category=None):
+    if depth > MAX_DEPTH:
+        return None, ""
+    children = _get_children(root)
+    for child in children:
+        try:
+            child_name = child.name
+        except Exception:
+            continue
+        path = "%s/%s" % (prefix, child_name) if prefix else child_name
+        try:
+            is_loadable = child.is_loadable
+        except Exception:
+            is_loadable = False
+        if (is_loadable and child_name.lower() == name.lower()
+                and _path_matches_category(path, category)):
+            return child, path
+        try:
+            is_folder = child.is_folder
+        except Exception:
+            is_folder = False
+        if is_folder:
+            result, result_path = _find_by_name_with_path(
+                child, name, depth + 1, path, category
+            )
+            if result is not None:
+                return result, result_path
+    return None, ""
+
+
+def _find_loadable_for_category(root, item_query, category):
+    if "/" in item_query:
+        target, path = _find_by_path_with_path(root, item_query.split("/"))
+    else:
+        target, path = _find_by_name_with_path(root, item_query, 0, category=category)
+    if target is None:
+        return None
+    if not _path_matches_category(path, category):
+        return None
+    return target
+
+
 class BrowserHandler(AbletonOSCHandler):
     def __init__(self, manager):
         super().__init__(manager)
@@ -181,6 +309,8 @@ class BrowserHandler(AbletonOSCHandler):
                 return ("unsupported",)
             supported = []
             for category_key, attr_name in CATEGORY_MAP.items():
+                if category_key == "max_for_live" and not _max_for_live_supported(browser):
+                    continue
                 if hasattr(browser, attr_name):
                     supported.append(category_key)
             if not supported:
@@ -204,6 +334,10 @@ class BrowserHandler(AbletonOSCHandler):
             if browser is None:
                 return ("error: browser API not available",)
 
+            unsupported_error = _max_for_live_unsupported_error(category_str, browser)
+            if unsupported_error is not None:
+                return unsupported_error
+
             attr_name = CATEGORY_MAP.get(category_str)
             if attr_name is None:
                 return ("error: unknown category '%s'" % category_str,)
@@ -218,8 +352,7 @@ class BrowserHandler(AbletonOSCHandler):
                 return ("error: failed to access category '%s'" % category_str,)
 
             results = []
-            ext_filter = _EXT_FILTERS.get(category_str)
-            _collect_loadable(root, "", 0, results, ext_filter)
+            _collect_loadable(root, "", 0, results, category_str)
             total = len(results)
             logger.info("browser/get/names: found %d items in %s" % (total, category_str))
             if not results:
@@ -253,6 +386,11 @@ class BrowserHandler(AbletonOSCHandler):
             browser = self._get_browser()
             if browser is None:
                 return ("error: browser API not available",)
+
+            unsupported_error = _max_for_live_unsupported_error(category_str, browser)
+            if unsupported_error is not None:
+                return unsupported_error
+
             if not hasattr(browser, "load_item"):
                 return ("error: browser.load_item not available",)
 
@@ -268,12 +406,7 @@ class BrowserHandler(AbletonOSCHandler):
                 logger.error("browser.%s access failed: %s" % (attr_name, e))
                 return ("error: failed to access category '%s'" % category_str,)
 
-            # Path-based resolution (contains "/") vs bare name fallback
-            if "/" in item_query:
-                segments = item_query.split("/")
-                target = _find_by_path(root, segments)
-            else:
-                target = _find_by_name(root, item_query, 0)
+            target = _find_loadable_for_category(root, item_query, category_str)
 
             if target is None:
                 return ("error: item '%s' not found in %s" % (item_query, category_str),)
@@ -297,7 +430,7 @@ class BrowserHandler(AbletonOSCHandler):
 
             # Count devices before loading (skip for presets — they modify
             # an existing device rather than adding a new one)
-            is_preset = category_str == "presets"
+            is_preset = _is_preset_category(category_str)
             device_count_before = -1
             if not is_preset:
                 try:
@@ -346,6 +479,10 @@ class BrowserHandler(AbletonOSCHandler):
             if browser is None:
                 return ("error: browser API not available",)
 
+            unsupported_error = _max_for_live_unsupported_error(category_str, browser)
+            if unsupported_error is not None:
+                return unsupported_error
+
             attr_name = CATEGORY_MAP.get(category_str)
             if attr_name is None:
                 return ("error: unknown category '%s'" % category_str,)
@@ -359,8 +496,7 @@ class BrowserHandler(AbletonOSCHandler):
                 return ("error: failed to access category '%s'" % category_str,)
 
             all_items = []
-            ext_filter = _EXT_FILTERS.get(category_str)
-            _collect_loadable(root, "", 0, all_items, ext_filter)
+            _collect_loadable(root, "", 0, all_items, category_str)
             matches = [item for item in all_items if query_str in item.lower()]
             logger.info("browser/search: %d matches for '%s' in %s (out of %d)"
                         % (len(matches), query_str, category_str, len(all_items)))
