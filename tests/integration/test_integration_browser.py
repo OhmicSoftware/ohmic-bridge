@@ -22,8 +22,9 @@ USER_LIBRARY_CATEGORY_SUFFIXES = {
     "midi_effect_racks": (".adg",),
     "ableton_presets": (".adv",),
     "plugin_presets": (".vstpreset", ".aupreset"),
-    "max_for_live": (".amxd",),
 }
+
+USER_LIBRARY_LIVE_NAME_CATEGORIES = {"user_library_max_for_live"}
 
 RACK_CATEGORY_PATH_PARTS = {
     "instrument_racks": "instrument rack",
@@ -80,6 +81,7 @@ def test_browser_capabilities_returnable(osc):
         "midi_effect_racks",
         "ableton_presets",
         "plugin_presets",
+        "user_library_max_for_live",
         "max_for_live",
         "unsupported",
     }
@@ -151,7 +153,10 @@ def test_legacy_browser_categories_are_rejected(osc):
 def test_user_library_categories_only_return_matching_paths(osc):
     capabilities = set(_browser_capabilities(osc))
     supported_categories = sorted(
-        set(USER_LIBRARY_CATEGORY_SUFFIXES).intersection(capabilities)
+        (
+            set(USER_LIBRARY_CATEGORY_SUFFIXES)
+            | USER_LIBRARY_LIVE_NAME_CATEGORIES
+        ).intersection(capabilities)
     )
     assert supported_categories, (
         "no User Library-backed browser categories were supported: %r"
@@ -163,10 +168,16 @@ def test_user_library_categories_only_return_matching_paths(osc):
         assert len(reply) >= 1 and reply[0] == category
         for item in _loadable_items(reply):
             lowered = item.lower()
-            assert lowered.endswith(USER_LIBRARY_CATEGORY_SUFFIXES[category]), (
-                "item %r in %s does not match expected suffixes %r"
-                % (item, category, USER_LIBRARY_CATEGORY_SUFFIXES[category])
-            )
+            if category in USER_LIBRARY_CATEGORY_SUFFIXES:
+                assert lowered.endswith(USER_LIBRARY_CATEGORY_SUFFIXES[category]), (
+                    "item %r in %s does not match expected suffixes %r"
+                    % (item, category, USER_LIBRARY_CATEGORY_SUFFIXES[category])
+                )
+            else:
+                assert "." not in lowered.rsplit("/", 1)[-1], (
+                    "Max for Live item %r should be a Live browser item name, "
+                    "not a filesystem path" % (item,)
+                )
             required_part = RACK_CATEGORY_PATH_PARTS.get(category)
             if required_part is not None:
                 parts = [part.strip().lower() for part in item.split("/")]

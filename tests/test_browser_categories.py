@@ -78,7 +78,8 @@ def test_category_map_exposes_ohmic_keys(browser_module):
     assert browser_module.CATEGORY_MAP["midi_effect_racks"] == "user_library"
     assert browser_module.CATEGORY_MAP["ableton_presets"] == "user_library"
     assert browser_module.CATEGORY_MAP["plugin_presets"] == "user_library"
-    assert browser_module.CATEGORY_MAP["max_for_live"] == "user_library"
+    assert browser_module.CATEGORY_MAP["user_library_max_for_live"] == "max_for_live"
+    assert browser_module.CATEGORY_MAP["max_for_live"] == "max_for_live"
 
 
 class _BrowserStub:
@@ -139,7 +140,7 @@ def test_classifies_max_for_live_paths(browser_module):
         browser_module._category_for_user_library_path(
             "Presets/Max for Live/Max Audio Effect/LFO.amxd"
         )
-        == "max_for_live"
+        == "user_library_max_for_live"
     )
 
 
@@ -213,6 +214,118 @@ def test_collect_loadable_leaves_non_user_library_categories_unfiltered(browser_
         [_FakeBrowserItem("Operator", loadable=True)], "", 0, results, "instruments"
     )
     assert results == ["Operator"]
+
+
+def test_collect_loadable_keeps_installed_max_for_live_unfiltered(browser_module):
+    browser_module._USER_LIBRARY_MAX_FOR_LIVE_STEMS = {"User LFO"}
+    results = []
+    browser_module._collect_loadable(
+        [_FakeBrowserItem("LFO", loadable=True)], "", 0, results, "max_for_live"
+    )
+    assert results == ["LFO"]
+
+
+def test_collect_loadable_filters_user_library_max_for_live(browser_module):
+    browser_module._USER_LIBRARY_MAX_FOR_LIVE_STEMS = {"IMG"}
+    tree = [
+        _FakeBrowserItem("Max Audio Effect", children=[
+            _FakeBrowserItem("IMG", loadable=True),
+            _FakeBrowserItem("Max Audio Effect", loadable=True),
+        ]),
+        _FakeBrowserItem("Max MIDI Effect", children=[
+            _FakeBrowserItem("Stepic", loadable=True),
+        ]),
+    ]
+    results = []
+    browser_module._collect_loadable(
+        tree, "", 0, results, "user_library_max_for_live"
+    )
+    assert results == ["Max Audio Effect/IMG"]
+
+
+def test_collect_category_items_deduplicates_user_max_for_live_by_stem(browser_module):
+    browser_module._USER_LIBRARY_MAX_FOR_LIVE_STEMS = {"IMG"}
+    browser = _BrowserStub(
+        max_for_live=[
+            _FakeBrowserItem("Max Audio Effect", children=[
+                _FakeBrowserItem("IMG", loadable=True),
+            ]),
+        ],
+        user_library=[
+            _FakeBrowserItem("Presets", children=[
+                _FakeBrowserItem("Audio Effects", children=[
+                    _FakeBrowserItem("Max Audio Effect", children=[
+                        _FakeBrowserItem("Imported", children=[
+                            _FakeBrowserItem("IMG.amxd", loadable=True),
+                        ]),
+                    ]),
+                ]),
+            ]),
+        ],
+    )
+
+    assert browser_module._collect_category_items(
+        browser, "user_library_max_for_live"
+    ) == ["Max Audio Effect/IMG"]
+
+
+def test_collect_installed_max_for_live_excludes_user_library_stems(browser_module):
+    browser_module._USER_LIBRARY_MAX_FOR_LIVE_STEMS = {"IMG"}
+    tree = [
+        _FakeBrowserItem("Max Audio Effect", children=[
+            _FakeBrowserItem("IMG", loadable=True),
+            _FakeBrowserItem("Max Audio Effect", loadable=True),
+        ]),
+    ]
+    results = []
+    browser_module._collect_loadable(tree, "", 0, results, "max_for_live")
+    assert results == ["Max Audio Effect/Max Audio Effect"]
+
+
+def test_collect_composite_installed_max_for_live_uses_audio_midi_roots(browser_module):
+    browser_module._USER_LIBRARY_MAX_FOR_LIVE_STEMS = set()
+    browser_module._INSTALLED_MAX_FOR_LIVE_STEMS = {"LFO", "Shaper MIDI"}
+    browser = _BrowserStub(
+        max_for_live=[
+            _FakeBrowserItem("Max Audio Effect", children=[
+                _FakeBrowserItem("Max Audio Effect", loadable=True),
+            ]),
+        ],
+        audio_effects=[
+            _FakeBrowserItem("Audio Effects", children=[
+                _FakeBrowserItem("LFO", loadable=True),
+                _FakeBrowserItem("Hybrid Reverb", loadable=True),
+            ]),
+        ],
+        midi_effects=[
+            _FakeBrowserItem("MIDI Effects", children=[
+                _FakeBrowserItem("Shaper MIDI", loadable=True),
+                _FakeBrowserItem("Scale", loadable=True),
+            ]),
+        ],
+    )
+
+    assert browser_module._collect_category_items(browser, "max_for_live") == [
+        "Max Audio Effect/Max Audio Effect",
+        "Audio Effects/LFO",
+        "MIDI Effects/Shaper MIDI",
+    ]
+
+
+def test_find_user_library_max_for_live_uses_max_for_live_tree(browser_module):
+    browser_module._USER_LIBRARY_MAX_FOR_LIVE_STEMS = {"IMG"}
+    browser = _BrowserStub(max_for_live=[
+        _FakeBrowserItem("Max Audio Effect", children=[
+            _FakeBrowserItem("IMG", loadable=True),
+        ]),
+    ])
+
+    target = browser_module._find_loadable_for_browser_category(
+        browser, "IMG", "user_library_max_for_live"
+    )
+
+    assert target is not None
+    assert target.name == "IMG"
 
 
 def test_find_loadable_for_category_rejects_mismatched_path(browser_module):
