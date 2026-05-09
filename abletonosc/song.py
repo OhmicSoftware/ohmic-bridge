@@ -8,11 +8,13 @@ from functools import partial
 from typing import Tuple, Any
 
 from .handler import AbletonOSCHandler, guarded_lom, guarded_lom_json
+from .arrangement_view import ArrangementDeltaCache
 
 class SongHandler(AbletonOSCHandler):
     def __init__(self, manager):
         super().__init__(manager)
         self.class_identifier = "song"
+        self._arrangement_delta_cache = ArrangementDeltaCache()
 
     def init_api(self):
         #--------------------------------------------------------------------------------
@@ -249,6 +251,23 @@ class SongHandler(AbletonOSCHandler):
             self.logger.debug("clip_grid: %d clips, %d bytes" % (len(clips), len(result)))
             return (result,)
         self.osc_server.add_handler("/live/song/get/clip_grid", clip_grid)
+
+        @guarded_lom_json("arrangement_snapshot")
+        def arrangement_snapshot(_):
+            data = self._arrangement_delta_cache.snapshot(self.song)
+            return (json.dumps(data),)
+
+        @guarded_lom_json("arrangement_delta")
+        def arrangement_delta(params):
+            since_revision = int(params[0]) if params else -1
+            data = self._arrangement_delta_cache.delta(
+                self.song, since_revision=since_revision)
+            return (since_revision, json.dumps(data))
+
+        self.osc_server.add_handler(
+            "/live/song/get/arrangement_snapshot", arrangement_snapshot)
+        self.osc_server.add_handler(
+            "/live/song/get/arrangement_delta", arrangement_delta)
 
         def song_get_track_data(params):
             """

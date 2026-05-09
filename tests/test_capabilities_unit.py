@@ -122,6 +122,7 @@ def test_probe_all_buckets_true_on_modern_ableton(fake_live_modern):
     assert result["song_cue_points"] is True
     assert result["song_beat_listener"] is True
     assert result["browser"] is True
+    assert result["arrangement_deltas"] is True
 
 
 def test_clip_note_probability_bucket_no_longer_exists(fake_live_modern):
@@ -176,3 +177,32 @@ def test_probe_catches_exception_per_bucket(fake_live_modern):
     result = capabilities.probe_capabilities()
     assert result["clip_notes_rw"] is False
     assert result["browser"] is True
+
+
+def test_arrangement_delta_identity_probe_requires_live_ptr(fake_live_modern):
+    capabilities = _import_fresh_capabilities()
+
+    class ClipWithoutIdentity:
+        name = "Intro"
+        start_time = 0.0
+        length = 4.0
+
+    class Track:
+        arrangement_clips = [ClipWithoutIdentity()]
+
+    class Song:
+        tracks = [Track()]
+
+    assert capabilities.probe_arrangement_deltas(Song()) is False
+
+
+def test_arrangement_delta_identity_probe_accepts_empty_arrangement(fake_live_modern):
+    capabilities = _import_fresh_capabilities()
+
+    class Track:
+        arrangement_clips = []
+
+    class Song:
+        tracks = [Track()]
+
+    assert capabilities.probe_arrangement_deltas(Song()) is True

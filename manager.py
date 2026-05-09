@@ -101,8 +101,11 @@ class Manager(ControlSurface):
             # thread. Relative form works from any method of the
             # Manager class. (Confirmed against Live 12.3.5 Log.txt.)
             from .abletonosc.capabilities import probe_capabilities
+            from .abletonosc.capabilities import probe_arrangement_deltas
             import json
-            return (json.dumps(probe_capabilities()),)
+            caps = dict(probe_capabilities())
+            caps["arrangement_deltas"] = probe_arrangement_deltas(self.song)
+            return (json.dumps(caps),)
 
         self.osc_server.add_handler("/live/test", test_callback)
         self.osc_server.add_handler("/live/api/reload", reload_callback)

@@ -37,6 +37,9 @@ CAPABILITY_GROUPS = {
         lambda: hasattr(Live.Track.Track, "create_midi_clip"),
         lambda: hasattr(Live.Track.Track, "delete_clip"),
     ],
+    "arrangement_deltas": [
+        lambda: hasattr(Live.Track.Track, "arrangement_clips"),
+    ],
     "clip_slot_duplicate": [
         lambda: hasattr(Live.ClipSlot.ClipSlot, "duplicate_clip_to"),
     ],
@@ -87,6 +90,35 @@ def probe_capabilities():
     _probe_result = result
     logger.info("Capability probe result: %s", result)
     return result
+
+
+def probe_arrangement_deltas(song) -> bool:
+    """Return whether optimized arrangement deltas can identify clips.
+
+    The `_live_ptr` identity we use is an instance attribute, so the
+    class-level capability table can only prove that arrangement clips
+    exist. When clips are present, inspect them directly. Empty
+    arrangements are supported because there is nothing to identify yet;
+    the snapshot endpoint will still validate identity whenever clips
+    later appear.
+    """
+    try:
+        if not probe_capabilities().get("arrangement_deltas", False):
+            return False
+        for track in list(getattr(song, "tracks", [])):
+            try:
+                clips = list(getattr(track, "arrangement_clips", []))
+            except Exception:
+                continue
+            for clip in clips:
+                value = getattr(clip, "_live_ptr", None)
+                if value is None:
+                    return False
+                int(value)
+        return True
+    except Exception:
+        logger.exception("arrangement delta capability probe failed")
+        return False
 
 
 def reset_for_testing():
