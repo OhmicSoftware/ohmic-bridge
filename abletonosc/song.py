@@ -8,7 +8,11 @@ from functools import partial
 from typing import Tuple, Any
 
 from .handler import AbletonOSCHandler, guarded_lom, guarded_lom_json
-from .arrangement_view import ArrangementDeltaCache, _track_index_for_parent
+from .arrangement_view import (
+    ArrangementDeltaCache,
+    _safe_bool_attr,
+    _track_index_for_parent,
+)
 
 class SongHandler(AbletonOSCHandler):
     def __init__(self, manager):
@@ -156,6 +160,8 @@ class SongHandler(AbletonOSCHandler):
             is_group_tracks = []
             group_parent_indices = []
             track_mutes = []
+            track_solos = []
+            track_arms = []
             playing_slots = []
             for ti, track in enumerate(tracks):
                 try:
@@ -174,7 +180,9 @@ class SongHandler(AbletonOSCHandler):
                     group_parent_indices.append(
                         _track_index_for_parent(parent, list(tracks))
                     )
-                    track_mutes.append(bool(track.mute))
+                    track_mutes.append(_safe_bool_attr(track, "mute"))
+                    track_solos.append(_safe_bool_attr(track, "solo"))
+                    track_arms.append(_safe_bool_attr(track, "arm"))
                     playing_slots.append(int(track.playing_slot_index))
                 except Exception as te:
                     self.logger.error("session_info track %d failed: %s\n%s" % (ti, te, traceback.format_exc()))
@@ -184,6 +192,8 @@ class SongHandler(AbletonOSCHandler):
                     is_group_tracks.append(False)
                     group_parent_indices.append(None)
                     track_mutes.append(False)
+                    track_solos.append(False)
+                    track_arms.append(False)
                     playing_slots.append(-1)
             scene_names = []
             for si, scene in enumerate(self.song.scenes):
@@ -199,6 +209,8 @@ class SongHandler(AbletonOSCHandler):
                 "is_group_tracks": is_group_tracks,
                 "group_parent_indices": group_parent_indices,
                 "track_mutes": track_mutes,
+                "track_solos": track_solos,
+                "track_arms": track_arms,
                 "playing_slots": playing_slots,
                 "num_scenes": num_scenes,
                 "scene_names": scene_names,

@@ -114,6 +114,9 @@ def _snapshot_body(song) -> dict:
     track_indices = []
     midi_tracks = []
     track_colors = []
+    track_mutes = []
+    track_solos = []
+    track_arms = []
     is_group_tracks = []
     group_parent_indices = []
     clips: dict[str, list[dict]] = {}
@@ -123,6 +126,9 @@ def _snapshot_body(song) -> dict:
         track_indices.append(track_index)
         midi_tracks.append(bool(getattr(track, "has_midi_input", False)))
         track_colors.append(_color_hex(getattr(track, "color", 0)))
+        track_mutes.append(_safe_bool_attr(track, "mute"))
+        track_solos.append(_safe_bool_attr(track, "solo"))
+        track_arms.append(_safe_bool_attr(track, "arm"))
         is_group_tracks.append(_safe_bool_attr(track, "is_foldable"))
         parent = _safe_attr(track, "group_track")
         group_parent_indices.append(_track_index_for_parent(parent, tracks))
@@ -153,6 +159,9 @@ def _snapshot_body(song) -> dict:
         "track_indices": track_indices,
         "midi_tracks": midi_tracks,
         "track_colors": track_colors,
+        "track_mutes": track_mutes,
+        "track_solos": track_solos,
+        "track_arms": track_arms,
         "is_group_tracks": is_group_tracks,
         "group_parent_indices": group_parent_indices,
         "clips": clips,
@@ -191,6 +200,9 @@ def _metadata_changed(previous: dict, current: dict) -> bool:
         "track_indices",
         "midi_tracks",
         "track_colors",
+        "track_mutes",
+        "track_solos",
+        "track_arms",
         "is_group_tracks",
         "group_parent_indices",
     )

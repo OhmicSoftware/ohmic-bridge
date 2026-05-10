@@ -35,6 +35,9 @@ class _Track:
         is_grouped=False,
         group_track=None,
         live_ptr=None,
+        mute=False,
+        solo=False,
+        arm=False,
     ):
         self.name = name
         if live_ptr is not None:
@@ -44,6 +47,9 @@ class _Track:
         self.is_foldable = is_foldable
         self.is_grouped = is_grouped
         self.group_track = group_track
+        self.mute = mute
+        self.solo = solo
+        self.arm = arm
         self.arrangement_clips = list(clips)
 
 
@@ -99,6 +105,9 @@ def test_build_arrangement_snapshot_includes_live_ptr_clip_ids():
     assert data["track_indices"] == [0, 1]
     assert data["midi_tracks"] == [True, True]
     assert data["track_colors"] == ["#112233", "#112233"]
+    assert data["track_mutes"] == [False, False]
+    assert data["track_solos"] == [False, False]
+    assert data["track_arms"] == [False, False]
     assert data["is_group_tracks"] == [False, False]
     assert data["group_parent_indices"] == [None, None]
     assert data["clips"] == {
@@ -137,6 +146,24 @@ def test_build_arrangement_snapshot_includes_group_parent_indices():
     assert data["status"] == "ok"
     assert data["is_group_tracks"] == [True, False, False]
     assert data["group_parent_indices"] == [None, 0, None]
+
+
+def test_build_arrangement_snapshot_includes_track_status_metadata():
+    from abletonosc.arrangement_view import build_arrangement_snapshot
+
+    song = _Song(
+        [
+            _Track("Bass", mute=True, solo=False, arm=False),
+            _Track("Lead", mute=False, solo=True, arm=True),
+        ]
+    )
+
+    data = _decode(build_arrangement_snapshot(song, revision=4))
+
+    assert data["status"] == "ok"
+    assert data["track_mutes"] == [True, False]
+    assert data["track_solos"] == [False, True]
+    assert data["track_arms"] == [False, True]
 
 
 def test_track_index_for_parent_matches_live_ptr_when_object_identity_differs():
@@ -248,6 +275,23 @@ def test_delta_cache_replaces_only_changed_track_clips():
             ],
         }
     ]
+
+
+def test_delta_cache_replaces_snapshot_when_track_status_metadata_changes():
+    from abletonosc.arrangement_view import ArrangementDeltaCache
+
+    bass = _Track("Bass", [_Clip(101, "Intro", 0.0, 8.0)])
+    song = _Song([bass])
+    cache = ArrangementDeltaCache()
+    snapshot = cache.snapshot(song)
+
+    bass.solo = True
+    delta = _decode(cache.delta(song, since_revision=snapshot["revision"]))
+
+    assert delta["status"] == "ok"
+    assert delta["revision"] == snapshot["revision"] + 1
+    assert delta["changes"][0]["type"] == "replace_snapshot"
+    assert delta["changes"][0]["snapshot"]["track_solos"] == [True]
 
 
 def test_delta_cache_replaces_track_clips_when_clip_color_changes():
