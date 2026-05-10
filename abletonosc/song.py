@@ -8,7 +8,7 @@ from functools import partial
 from typing import Tuple, Any
 
 from .handler import AbletonOSCHandler, guarded_lom, guarded_lom_json
-from .arrangement_view import ArrangementDeltaCache
+from .arrangement_view import ArrangementDeltaCache, _track_index_for_parent
 
 class SongHandler(AbletonOSCHandler):
     def __init__(self, manager):
@@ -145,13 +145,16 @@ class SongHandler(AbletonOSCHandler):
             """Return track metadata + song scale in one call.
 
             Response: JSON string with track_names, track_colors, midi_tracks,
-            num_scenes, root_note, scale_name, tempo, is_playing.
+            is_group_tracks, group_parent_indices, num_scenes, root_note,
+            scale_name, tempo, is_playing.
             """
             tracks = self.song.tracks
             num_scenes = len(self.song.scenes)
             track_names = []
             track_colors = []
             midi_tracks = []
+            is_group_tracks = []
+            group_parent_indices = []
             track_mutes = []
             playing_slots = []
             for ti, track in enumerate(tracks):
@@ -160,6 +163,17 @@ class SongHandler(AbletonOSCHandler):
                     c = track.color
                     track_colors.append("#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF))
                     midi_tracks.append(bool(track.has_midi_input))
+                    try:
+                        is_group_tracks.append(bool(getattr(track, "is_foldable", False)))
+                    except Exception:
+                        is_group_tracks.append(False)
+                    try:
+                        parent = getattr(track, "group_track", None)
+                    except Exception:
+                        parent = None
+                    group_parent_indices.append(
+                        _track_index_for_parent(parent, list(tracks))
+                    )
                     track_mutes.append(bool(track.mute))
                     playing_slots.append(int(track.playing_slot_index))
                 except Exception as te:
@@ -167,6 +181,8 @@ class SongHandler(AbletonOSCHandler):
                     track_names.append("(error)")
                     track_colors.append("#808080")
                     midi_tracks.append(False)
+                    is_group_tracks.append(False)
+                    group_parent_indices.append(None)
                     track_mutes.append(False)
                     playing_slots.append(-1)
             scene_names = []
@@ -180,6 +196,8 @@ class SongHandler(AbletonOSCHandler):
                 "track_names": track_names,
                 "track_colors": track_colors,
                 "midi_tracks": midi_tracks,
+                "is_group_tracks": is_group_tracks,
+                "group_parent_indices": group_parent_indices,
                 "track_mutes": track_mutes,
                 "playing_slots": playing_slots,
                 "num_scenes": num_scenes,

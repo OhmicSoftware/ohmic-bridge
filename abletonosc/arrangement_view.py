@@ -72,12 +72,50 @@ def _clip_row(clip, clip_index: int) -> dict:
     }
 
 
+def _track_index_for_parent(parent, tracks: list) -> int | None:
+    if parent is None:
+        return None
+    for index, track in enumerate(tracks):
+        if track is parent:
+            return index
+    for index, track in enumerate(tracks):
+        try:
+            if track == parent:
+                return index
+        except Exception:
+            continue
+
+    parent_ptr = getattr(parent, "_live_ptr", None)
+    if parent_ptr is None:
+        return None
+    for index, track in enumerate(tracks):
+        if getattr(track, "_live_ptr", None) == parent_ptr:
+            return index
+    return None
+
+
+def _safe_bool_attr(target, attr: str) -> bool:
+    try:
+        return bool(getattr(target, attr, False))
+    except Exception:
+        return False
+
+
+def _safe_attr(target, attr: str):
+    try:
+        return getattr(target, attr, None)
+    except Exception:
+        return None
+
+
 def _snapshot_body(song) -> dict:
     tracks = list(getattr(song, "tracks", []))
     track_names = []
     track_indices = []
     midi_tracks = []
     track_colors = []
+    is_group_tracks = []
+    group_parent_indices = []
     clips: dict[str, list[dict]] = {}
 
     for track_index, track in enumerate(tracks):
@@ -85,6 +123,9 @@ def _snapshot_body(song) -> dict:
         track_indices.append(track_index)
         midi_tracks.append(bool(getattr(track, "has_midi_input", False)))
         track_colors.append(_color_hex(getattr(track, "color", 0)))
+        is_group_tracks.append(_safe_bool_attr(track, "is_foldable"))
+        parent = _safe_attr(track, "group_track")
+        group_parent_indices.append(_track_index_for_parent(parent, tracks))
         try:
             arrangement_clips = list(getattr(track, "arrangement_clips", []))
         except Exception:
@@ -112,6 +153,8 @@ def _snapshot_body(song) -> dict:
         "track_indices": track_indices,
         "midi_tracks": midi_tracks,
         "track_colors": track_colors,
+        "is_group_tracks": is_group_tracks,
+        "group_parent_indices": group_parent_indices,
         "clips": clips,
         "locators": locators,
         "locators_available": True,
@@ -143,7 +186,14 @@ def build_arrangement_snapshot(song, *, revision: int) -> dict:
 
 
 def _metadata_changed(previous: dict, current: dict) -> bool:
-    keys = ("track_names", "track_indices", "midi_tracks", "track_colors")
+    keys = (
+        "track_names",
+        "track_indices",
+        "midi_tracks",
+        "track_colors",
+        "is_group_tracks",
+        "group_parent_indices",
+    )
     return any(previous.get(key) != current.get(key) for key in keys)
 
 

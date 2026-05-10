@@ -31,11 +31,32 @@ class _Track:
         *,
         color=0x112233,
         has_midi_input=True,
+        is_foldable=False,
+        is_grouped=False,
+        group_track=None,
+        live_ptr=None,
     ):
         self.name = name
+        if live_ptr is not None:
+            self._live_ptr = live_ptr
         self.color = color
         self.has_midi_input = has_midi_input
+        self.is_foldable = is_foldable
+        self.is_grouped = is_grouped
+        self.group_track = group_track
         self.arrangement_clips = list(clips)
+
+
+class _EqualTrack(_Track):
+    def __init__(self, name, equality_key, **kwargs):
+        super().__init__(name, **kwargs)
+        self.equality_key = equality_key
+
+    def __eq__(self, other):
+        return (
+            isinstance(other, _EqualTrack)
+            and self.equality_key == other.equality_key
+        )
 
 
 class _CuePoint:
@@ -78,6 +99,8 @@ def test_build_arrangement_snapshot_includes_live_ptr_clip_ids():
     assert data["track_indices"] == [0, 1]
     assert data["midi_tracks"] == [True, True]
     assert data["track_colors"] == ["#112233", "#112233"]
+    assert data["is_group_tracks"] == [False, False]
+    assert data["group_parent_indices"] == [None, None]
     assert data["clips"] == {
         "0": [
             {
@@ -94,6 +117,66 @@ def test_build_arrangement_snapshot_includes_live_ptr_clip_ids():
     }
     assert data["locators"] == [{"name": "Verse", "time": 16.0}]
     assert data["current_song_time"] == 12.5
+
+
+def test_build_arrangement_snapshot_includes_group_parent_indices():
+    from abletonosc.arrangement_view import build_arrangement_snapshot
+
+    group = _Track("Strings Group", has_midi_input=False, is_foldable=True)
+    child = _Track(
+        "Violins",
+        [_Clip(101, "Verse", 0.0, 8.0)],
+        is_grouped=True,
+        group_track=group,
+    )
+    outside = _Track("Bass", [_Clip(201, "Bass", 0.0, 8.0)])
+    song = _Song([group, child, outside])
+
+    data = _decode(build_arrangement_snapshot(song, revision=3))
+
+    assert data["status"] == "ok"
+    assert data["is_group_tracks"] == [True, False, False]
+    assert data["group_parent_indices"] == [None, 0, None]
+
+
+def test_track_index_for_parent_matches_live_ptr_when_object_identity_differs():
+    from abletonosc.arrangement_view import _track_index_for_parent
+
+    parent_from_child = _Track(
+        "Strings Group",
+        has_midi_input=False,
+        is_foldable=True,
+        live_ptr=9001,
+    )
+    listed_group = _Track(
+        "Strings Group",
+        has_midi_input=False,
+        is_foldable=True,
+        live_ptr=9001,
+    )
+    child = _Track("Violins", is_grouped=True, group_track=parent_from_child)
+
+    assert _track_index_for_parent(parent_from_child, [listed_group, child]) == 0
+
+
+def test_track_index_for_parent_matches_live_object_equality():
+    from abletonosc.arrangement_view import _track_index_for_parent
+
+    parent_from_child = _EqualTrack(
+        "Strings Group",
+        "group-a",
+        has_midi_input=False,
+        is_foldable=True,
+    )
+    listed_group = _EqualTrack(
+        "Strings Group",
+        "group-a",
+        has_midi_input=False,
+        is_foldable=True,
+    )
+    child = _Track("Violins", is_grouped=True, group_track=parent_from_child)
+
+    assert _track_index_for_parent(parent_from_child, [listed_group, child]) == 0
 
 
 def test_build_arrangement_snapshot_reports_missing_identity():
