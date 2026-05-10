@@ -23,6 +23,29 @@ def _color_hex(value) -> str:
     )
 
 
+def _optional_color_hex(target) -> str | None:
+    try:
+        value = getattr(target, "color")
+    except Exception:
+        return None
+    if value is None:
+        return None
+    return _color_hex(value)
+
+
+def _optional_int(target, attr: str) -> int | None:
+    try:
+        value = getattr(target, attr)
+    except Exception:
+        return None
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _clip_id(clip) -> str:
     try:
         value = getattr(clip, "_live_ptr")
@@ -44,6 +67,8 @@ def _clip_row(clip, clip_index: int) -> dict:
         "name": str(getattr(clip, "name", "")),
         "start": float(getattr(clip, "start_time", 0.0)),
         "length": float(getattr(clip, "length", 0.0)),
+        "color": _optional_color_hex(clip),
+        "color_index": _optional_int(clip, "color_index"),
     }
 
 

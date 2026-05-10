@@ -4,12 +4,23 @@ import json
 
 
 class _Clip:
-    def __init__(self, ptr, name, start_time, length):
+    def __init__(
+        self,
+        ptr,
+        name,
+        start_time,
+        length,
+        *,
+        color=0x445566,
+        color_index=12,
+    ):
         if ptr is not None:
             self._live_ptr = ptr
         self.name = name
         self.start_time = start_time
         self.length = length
+        self.color = color
+        self.color_index = color_index
 
 
 class _Track:
@@ -75,6 +86,8 @@ def test_build_arrangement_snapshot_includes_live_ptr_clip_ids():
                 "name": "Intro",
                 "start": 0.0,
                 "length": 8.0,
+                "color": "#445566",
+                "color_index": 12,
             }
         ],
         "1": [],
@@ -122,7 +135,14 @@ def test_delta_cache_replaces_only_changed_track_clips():
     cache = ArrangementDeltaCache()
     snapshot = cache.snapshot(song)
 
-    lead.arrangement_clips = [_Clip(202, "Hook 2", 20.0, 4.0)]
+    lead.arrangement_clips = [_Clip(
+        202,
+        "Hook 2",
+        20.0,
+        4.0,
+        color=0x778899,
+        color_index=18,
+    )]
     delta = _decode(cache.delta(song, since_revision=snapshot["revision"]))
 
     assert delta["status"] == "ok"
@@ -139,6 +159,41 @@ def test_delta_cache_replaces_only_changed_track_clips():
                     "name": "Hook 2",
                     "start": 20.0,
                     "length": 4.0,
+                    "color": "#778899",
+                    "color_index": 18,
+                }
+            ],
+        }
+    ]
+
+
+def test_delta_cache_replaces_track_clips_when_clip_color_changes():
+    from abletonosc.arrangement_view import ArrangementDeltaCache
+
+    bass = _Track("Bass", [_Clip(101, "Intro", 0.0, 8.0)])
+    song = _Song([bass])
+    cache = ArrangementDeltaCache()
+    snapshot = cache.snapshot(song)
+
+    bass.arrangement_clips[0].color = 0x99AABB
+    bass.arrangement_clips[0].color_index = 21
+    delta = _decode(cache.delta(song, since_revision=snapshot["revision"]))
+
+    assert delta["status"] == "ok"
+    assert delta["revision"] == snapshot["revision"] + 1
+    assert delta["changes"] == [
+        {
+            "type": "replace_track_clips",
+            "track_index": 0,
+            "clips": [
+                {
+                    "index": 0,
+                    "clip_id": "101",
+                    "name": "Intro",
+                    "start": 0.0,
+                    "length": 8.0,
+                    "color": "#99aabb",
+                    "color_index": 21,
                 }
             ],
         }

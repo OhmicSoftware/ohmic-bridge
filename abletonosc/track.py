@@ -137,6 +137,20 @@ class TrackHandler(AbletonOSCHandler):
         def track_get_arrangement_clip_start_times(track, _):
             return tuple(clip.start_time for clip in track.arrangement_clips)
 
+        @guarded_lom("track_get_arrangement_clip_colors")
+        def track_get_arrangement_clip_colors(track, _):
+            return tuple(
+                getattr(clip, "color", None)
+                for clip in track.arrangement_clips
+            )
+
+        @guarded_lom("track_get_arrangement_clip_color_indices")
+        def track_get_arrangement_clip_color_indices(track, _):
+            return tuple(
+                getattr(clip, "color_index", None)
+                for clip in track.arrangement_clips
+            )
+
         """
         Returns a list of clip properties, or Nil if clip is empty
         """
@@ -146,6 +160,8 @@ class TrackHandler(AbletonOSCHandler):
         self.osc_server.add_handler("/live/track/get/arrangement_clips/name", create_track_callback(track_get_arrangement_clip_names))
         self.osc_server.add_handler("/live/track/get/arrangement_clips/length", create_track_callback(track_get_arrangement_clip_lengths))
         self.osc_server.add_handler("/live/track/get/arrangement_clips/start_time", create_track_callback(track_get_arrangement_clip_start_times))
+        self.osc_server.add_handler("/live/track/get/arrangement_clips/color", create_track_callback(track_get_arrangement_clip_colors))
+        self.osc_server.add_handler("/live/track/get/arrangement_clips/color_index", create_track_callback(track_get_arrangement_clip_color_indices))
 
         def track_get_num_devices(track, _):
             return len(track.devices),
