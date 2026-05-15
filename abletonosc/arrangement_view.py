@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 
 SCHEMA_VERSION = 1
 
 
 class ArrangementIdentityError(RuntimeError):
     """Raised when a Live arrangement clip lacks usable object identity."""
+
+
+class ArrangementNoteSignatureError(RuntimeError):
+    """Raised when a Live arrangement clip's notes cannot be read."""
 
 
 def _color_hex(value) -> str:
@@ -46,6 +51,54 @@ def _optional_int(target, attr: str) -> int | None:
         return None
 
 
+def _optional_float(target, attr: str) -> float | None:
+    try:
+        value = getattr(target, attr)
+    except Exception:
+        return None
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _note_field(value) -> str:
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return f"{number:.6f}".rstrip("0").rstrip(".")
+
+
+def _clip_notes_signature(clip) -> str:
+    try:
+        notes = list(clip.get_notes_extended(0, 128, -8192, 16384) or [])
+    except Exception as exc:
+        raise ArrangementNoteSignatureError(
+            "Arrangement clip notes are unavailable in this Live session."
+        ) from exc
+
+    rows = []
+    for note in notes:
+        rows.append((
+            int(getattr(note, "pitch", 0)),
+            _note_field(getattr(note, "start_time", 0.0)),
+            _note_field(getattr(note, "duration", 0.0)),
+            int(getattr(note, "velocity", 0)),
+            1 if bool(getattr(note, "mute", False)) else 0,
+            _note_field(getattr(note, "probability", 1.0)),
+        ))
+    if not rows:
+        return "0:0"
+    rows.sort()
+    digest = hashlib.sha1(repr(rows).encode("utf-8")).hexdigest()[:16]
+    return f"{len(rows)}:{digest}"
+
+
 def _clip_id(clip) -> str:
     try:
         value = getattr(clip, "_live_ptr")
@@ -60,15 +113,25 @@ def _clip_id(clip) -> str:
     return str(int(value))
 
 
-def _clip_row(clip, clip_index: int) -> dict:
+def _clip_row(clip, clip_index: int, *, is_midi_track: bool) -> dict:
+    start = float(getattr(clip, "start_time", 0.0))
+    length = float(getattr(clip, "length", 0.0))
+    end = _optional_float(clip, "end_time")
     return {
         "index": int(clip_index),
         "clip_id": _clip_id(clip),
         "name": str(getattr(clip, "name", "")),
-        "start": float(getattr(clip, "start_time", 0.0)),
-        "length": float(getattr(clip, "length", 0.0)),
+        "start": start,
+        "length": length,
+        "end": end if end is not None else start + length,
+        "looping": bool(getattr(clip, "looping", False)),
+        "loop_start": _optional_float(clip, "loop_start"),
+        "loop_end": _optional_float(clip, "loop_end"),
         "color": _optional_color_hex(clip),
         "color_index": _optional_int(clip, "color_index"),
+        "notes_signature": (
+            _clip_notes_signature(clip) if is_midi_track else None
+        ),
     }
 
 
@@ -121,7 +184,8 @@ def _snapshot_body(song) -> dict:
     for track_index, track in enumerate(tracks):
         track_names.append(str(getattr(track, "name", "")))
         track_indices.append(track_index)
-        midi_tracks.append(bool(getattr(track, "has_midi_input", False)))
+        is_midi_track = bool(getattr(track, "has_midi_input", False))
+        midi_tracks.append(is_midi_track)
         track_colors.append(_color_hex(getattr(track, "color", 0)))
         is_group_tracks.append(_safe_bool_attr(track, "is_foldable"))
         parent = _safe_attr(track, "group_track")
@@ -131,7 +195,7 @@ def _snapshot_body(song) -> dict:
         except Exception:
             arrangement_clips = []
         clips[str(track_index)] = [
-            _clip_row(clip, clip_index)
+            _clip_row(clip, clip_index, is_midi_track=is_midi_track)
             for clip_index, clip in enumerate(arrangement_clips)
         ]
 
@@ -177,6 +241,8 @@ def build_arrangement_snapshot(song, *, revision: int) -> dict:
         body = _snapshot_body(song)
     except ArrangementIdentityError as exc:
         return _error_payload("identity_unavailable", str(exc))
+    except ArrangementNoteSignatureError as exc:
+        return _error_payload("notes_unavailable", str(exc))
     body.update({
         "status": "ok",
         "schema_version": SCHEMA_VERSION,
@@ -228,15 +294,21 @@ class ArrangementDeltaCache:
             current = _snapshot_body(song)
         except ArrangementIdentityError as exc:
             return _error_payload("identity_unavailable", str(exc))
+        except ArrangementNoteSignatureError as exc:
+            return _error_payload("notes_unavailable", str(exc))
 
         previous = self._snapshot
         changes = []
 
         if _metadata_changed(previous, current):
             self._revision += 1
-            full = build_arrangement_snapshot(song, revision=self._revision)
-            if full.get("status") == "ok":
-                self._snapshot = copy.deepcopy(full)
+            full = copy.deepcopy(current)
+            full.update({
+                "status": "ok",
+                "schema_version": SCHEMA_VERSION,
+                "revision": self._revision,
+            })
+            self._snapshot = copy.deepcopy(full)
             return {
                 "status": "ok",
                 "schema_version": SCHEMA_VERSION,

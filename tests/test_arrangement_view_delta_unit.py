@@ -3,6 +3,24 @@
 import json
 
 
+class _Note:
+    def __init__(
+        self,
+        pitch,
+        start_time,
+        duration,
+        velocity,
+        mute=False,
+        probability=1.0,
+    ):
+        self.pitch = pitch
+        self.start_time = start_time
+        self.duration = duration
+        self.velocity = velocity
+        self.mute = mute
+        self.probability = probability
+
+
 class _Clip:
     def __init__(
         self,
@@ -13,14 +31,47 @@ class _Clip:
         *,
         color=0x445566,
         color_index=12,
+        end_time=None,
+        looping=False,
+        loop_start=None,
+        loop_end=None,
+        notes=(),
+        notes_error=None,
+        notes_error_after_calls=None,
     ):
         if ptr is not None:
             self._live_ptr = ptr
         self.name = name
         self.start_time = start_time
         self.length = length
+        self.end_time = start_time + length if end_time is None else end_time
+        self.looping = looping
+        self.loop_start = 0.0 if loop_start is None else loop_start
+        self.loop_end = length if loop_end is None else loop_end
         self.color = color
         self.color_index = color_index
+        self._notes = list(notes)
+        self._notes_error = notes_error
+        self._notes_error_after_calls = notes_error_after_calls
+        self._notes_call_count = 0
+
+    def get_notes_extended(self, pitch_start, pitch_span, time_start, time_span):
+        self._notes_call_count += 1
+        if self._notes_error is not None:
+            raise self._notes_error
+        if (
+            self._notes_error_after_calls is not None
+            and self._notes_call_count > self._notes_error_after_calls
+        ):
+            raise RuntimeError("notes should not be read again")
+        pitch_end = pitch_start + pitch_span
+        time_end = time_start + time_span
+        return [
+            note for note in self._notes
+            if pitch_start <= note.pitch < pitch_end
+            and note.start_time < time_end
+            and note.start_time + note.duration > time_start
+        ]
 
 
 class _Track:
@@ -109,14 +160,51 @@ def test_build_arrangement_snapshot_includes_live_ptr_clip_ids():
                 "name": "Intro",
                 "start": 0.0,
                 "length": 8.0,
+                "end": 8.0,
+                "looping": False,
+                "loop_start": 0.0,
+                "loop_end": 8.0,
                 "color": "#445566",
                 "color_index": 12,
+                "notes_signature": "0:0",
             }
         ],
         "1": [],
     }
     assert data["locators"] == [{"name": "Verse", "time": 16.0}]
     assert data["current_song_time"] == 12.5
+
+
+def test_build_arrangement_snapshot_includes_loop_metadata():
+    from abletonosc.arrangement_view import build_arrangement_snapshot
+
+    song = _Song([
+        _Track(
+            "Lead",
+            [
+                _Clip(
+                    101,
+                    "Looped Hook",
+                    8.0,
+                    4.0,
+                    end_time=24.0,
+                    looping=True,
+                    loop_start=0.0,
+                    loop_end=4.0,
+                )
+            ],
+        )
+    ])
+
+    data = _decode(build_arrangement_snapshot(song, revision=1))
+
+    clip = data["clips"]["0"][0]
+    assert clip["start"] == 8.0
+    assert clip["length"] == 4.0
+    assert clip["end"] == 24.0
+    assert clip["looping"] is True
+    assert clip["loop_start"] == 0.0
+    assert clip["loop_end"] == 4.0
 
 
 def test_build_arrangement_snapshot_includes_group_parent_indices():
@@ -191,6 +279,53 @@ def test_build_arrangement_snapshot_reports_missing_identity():
     assert "Arrangement clip identity is unavailable" in data["message"]
 
 
+def test_build_arrangement_snapshot_reports_unreadable_clip_notes():
+    from abletonosc.arrangement_view import build_arrangement_snapshot
+
+    song = _Song([
+        _Track(
+            "Bass",
+            [
+                _Clip(
+                    101,
+                    "Intro",
+                    0.0,
+                    8.0,
+                    notes_error=RuntimeError("notes temporarily unavailable"),
+                )
+            ],
+        )
+    ])
+
+    data = _decode(build_arrangement_snapshot(song, revision=1))
+
+    assert data["status"] == "error"
+    assert data["code"] == "notes_unavailable"
+    assert "Arrangement clip notes are unavailable" in data["message"]
+
+
+def test_build_arrangement_snapshot_skips_note_signature_for_audio_tracks():
+    from abletonosc.arrangement_view import build_arrangement_snapshot
+
+    audio_clip = _Clip(
+        101,
+        "Audio Intro",
+        0.0,
+        8.0,
+        notes_error=RuntimeError("audio clips do not expose MIDI notes"),
+    )
+    song = _Song([
+        _Track("Audio", [audio_clip], has_midi_input=False)
+    ])
+
+    data = _decode(build_arrangement_snapshot(song, revision=1))
+
+    assert data["status"] == "ok"
+    assert data["midi_tracks"] == [False]
+    assert data["clips"]["0"][0]["notes_signature"] is None
+    assert audio_clip._notes_call_count == 0
+
+
 def test_delta_cache_returns_no_changes_when_snapshot_is_unchanged():
     from abletonosc.arrangement_view import ArrangementDeltaCache
 
@@ -239,11 +374,16 @@ def test_delta_cache_replaces_only_changed_track_clips():
                 {
                     "index": 0,
                     "clip_id": "202",
-                    "name": "Hook 2",
-                    "start": 20.0,
-                    "length": 4.0,
-                    "color": "#778899",
-                    "color_index": 18,
+                        "name": "Hook 2",
+                        "start": 20.0,
+                        "length": 4.0,
+                        "end": 24.0,
+                        "looping": False,
+                        "loop_start": 0.0,
+                        "loop_end": 4.0,
+                        "color": "#778899",
+                        "color_index": 18,
+                        "notes_signature": "0:0",
                 }
             ],
         }
@@ -272,15 +412,120 @@ def test_delta_cache_replaces_track_clips_when_clip_color_changes():
                 {
                     "index": 0,
                     "clip_id": "101",
-                    "name": "Intro",
-                    "start": 0.0,
-                    "length": 8.0,
-                    "color": "#99aabb",
-                    "color_index": 21,
+                        "name": "Intro",
+                        "start": 0.0,
+                        "length": 8.0,
+                        "end": 8.0,
+                        "looping": False,
+                        "loop_start": 0.0,
+                        "loop_end": 8.0,
+                        "color": "#99aabb",
+                        "color_index": 21,
+                        "notes_signature": "0:0",
                 }
             ],
         }
     ]
+
+
+def test_delta_cache_replaces_track_clips_when_clip_notes_change():
+    from abletonosc.arrangement_view import ArrangementDeltaCache
+
+    bass = _Track(
+        "Bass",
+        [
+            _Clip(
+                101,
+                "Intro",
+                0.0,
+                8.0,
+                notes=[_Note(48, 0.0, 1.0, 100)],
+            )
+        ],
+    )
+    song = _Song([bass])
+    cache = ArrangementDeltaCache()
+    snapshot = cache.snapshot(song)
+
+    old_signature = snapshot["clips"]["0"][0]["notes_signature"]
+    bass.arrangement_clips[0]._notes.append(_Note(50, 1.0, 0.5, 92))
+
+    delta = _decode(cache.delta(song, since_revision=snapshot["revision"]))
+
+    assert delta["status"] == "ok"
+    assert delta["revision"] == snapshot["revision"] + 1
+    changed = delta["changes"][0]
+    assert changed["type"] == "replace_track_clips"
+    assert changed["track_index"] == 0
+    assert changed["clips"][0]["clip_id"] == "101"
+    assert changed["clips"][0]["notes_signature"] != old_signature
+
+
+def test_delta_cache_returns_no_changes_when_notes_are_unchanged():
+    from abletonosc.arrangement_view import ArrangementDeltaCache
+
+    bass = _Track(
+        "Bass",
+        [
+            _Clip(
+                101,
+                "Intro",
+                0.0,
+                8.0,
+                notes=[_Note(48, 0.0, 1.0, 100), _Note(52, 1.0, 1.0, 95)],
+            )
+        ],
+    )
+    song = _Song([bass])
+    cache = ArrangementDeltaCache()
+    snapshot = cache.snapshot(song)
+
+    delta = _decode(cache.delta(song, since_revision=snapshot["revision"]))
+
+    assert delta["status"] == "ok"
+    assert delta["revision"] == snapshot["revision"]
+    assert delta["changes"] == []
+
+
+def test_delta_cache_reports_unreadable_clip_notes():
+    from abletonosc.arrangement_view import ArrangementDeltaCache
+
+    bass = _Track("Bass", [_Clip(101, "Intro", 0.0, 8.0)])
+    song = _Song([bass])
+    cache = ArrangementDeltaCache()
+    snapshot = cache.snapshot(song)
+
+    bass.arrangement_clips[0]._notes_error = RuntimeError(
+        "notes temporarily unavailable"
+    )
+    delta = _decode(cache.delta(song, since_revision=snapshot["revision"]))
+
+    assert delta["status"] == "error"
+    assert delta["code"] == "notes_unavailable"
+    assert "Arrangement clip notes are unavailable" in delta["message"]
+
+
+def test_delta_cache_reuses_current_body_when_metadata_changes():
+    from abletonosc.arrangement_view import ArrangementDeltaCache
+
+    clip = _Clip(101, "Intro", 0.0, 8.0, notes_error_after_calls=2)
+    bass = _Track("Bass", [clip])
+    song = _Song([bass])
+    cache = ArrangementDeltaCache()
+    snapshot = cache.snapshot(song)
+
+    bass.name = "Bass Renamed"
+    delta = _decode(cache.delta(song, since_revision=snapshot["revision"]))
+
+    assert delta["status"] == "ok"
+    assert delta["revision"] == snapshot["revision"] + 1
+    assert delta["changes"][0]["type"] == "replace_snapshot"
+    replacement = delta["changes"][0]["snapshot"]
+    assert replacement["status"] == "ok"
+    assert replacement["revision"] == delta["revision"]
+    assert replacement["track_names"] == ["Bass Renamed"]
+    assert replacement["clips"]["0"][0]["notes_signature"] == "0:0"
+    assert clip._notes_call_count == 2
 
 
 def test_delta_cache_requests_snapshot_when_base_revision_is_unknown():
