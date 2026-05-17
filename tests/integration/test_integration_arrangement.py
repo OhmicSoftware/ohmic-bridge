@@ -2,6 +2,8 @@
 
 do not parallelize — all integration tests target the same Ableton
 process."""
+import json
+
 import pytest
 from tests.integration.conftest import (
     create_temp_midi_track,
@@ -139,6 +141,46 @@ def test_add_notes_to_arrangement_clip_roundtrips(osc):
             % (final_count, baseline_count)
         )
 
+
+def test_arrangement_delta_changes_when_arrangement_clip_notes_change(osc):
+    baseline_count, latest_end = _arrangement_clips_baseline(osc)
+    safe_start = latest_end + 8.0
+    osc.send_message("/live/arrangement_clip/create", [TRACK_ID, safe_start, 4.0])
+    wait_one_tick()
+    clip_index = _find_clip_index_by_start(osc, safe_start)
+
+    try:
+        snapshot_reply = osc.query("/live/song/get/arrangement_snapshot", [])
+        snapshot = json.loads(snapshot_reply[-1])
+        assert snapshot["status"] == "ok"
+        before_clip = snapshot["clips"][str(TRACK_ID)][clip_index]
+        before_signature = before_clip["notes_signature"]
+
+        osc.send_message(
+            "/live/arrangement_clip/add/notes",
+            [TRACK_ID, clip_index, 60, 0.5, 1.0, 100, 0, 1.0],
+        )
+        wait_one_tick()
+
+        delta_reply = osc.query(
+            "/live/song/get/arrangement_delta", [snapshot["revision"]])
+        delta = json.loads(delta_reply[-1])
+        assert delta["status"] == "ok"
+        assert len(delta["changes"]) == 1
+        change = delta["changes"][0]
+        assert change["type"] == "replace_track_clips"
+        assert change["track_index"] == TRACK_ID
+        changed_clip = change["clips"][clip_index]
+        assert changed_clip["clip_id"] == before_clip["clip_id"]
+        assert changed_clip["notes_signature"] != before_signature
+    finally:
+        osc.send_message("/live/arrangement_clip/delete", [TRACK_ID, clip_index])
+        wait_one_tick()
+        final_count = _arrangement_clips_baseline(osc)[0]
+        assert final_count == baseline_count, (
+            "teardown left track at %d clips (expected baseline %d)"
+            % (final_count, baseline_count)
+        )
 
 def _decode_arrangement_notes(reply):
     """Decode /live/arrangement_clip/get/notes reply into per-note dicts.

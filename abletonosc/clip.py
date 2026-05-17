@@ -392,7 +392,7 @@ class ClipHandler(AbletonOSCHandler):
             if len(params) == 4:
                 pitch_start, pitch_span, time_start, time_span = params
             elif len(params) == 0:
-                pitch_start, pitch_span, time_start, time_span = 0, 127, -8192, 16384
+                pitch_start, pitch_span, time_start, time_span = 0, 128, -8192, 16384
             else:
                 raise ValueError("Invalid number of arguments for /arrangement_clip/get/notes. Either 0 or 4 arguments must be passed.")
             notes = clip.get_notes_extended(

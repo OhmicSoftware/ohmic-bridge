@@ -219,6 +219,53 @@ def test_arrangement_clip_remove_notes_handler_returns_ok_ack():
     )
 
 
+def test_arrangement_clip_get_notes_default_includes_pitch_127():
+    clip_module = _fresh_clip_module()
+    handler = clip_module.ClipHandler.__new__(clip_module.ClipHandler)
+    callbacks = {}
+
+    class _Server:
+        def add_handler(self, address, callback):
+            callbacks[address] = callback
+
+    class _Note:
+        pitch = 127
+        start_time = 0.0
+        duration = 1.0
+        velocity = 100
+        mute = False
+        probability = 1.0
+
+    class _Clip:
+        def __init__(self):
+            self.queried_args = None
+
+        def get_notes_extended(self, pitch_start, pitch_span, time_start, time_span):
+            self.queried_args = (pitch_start, pitch_span, time_start, time_span)
+            if pitch_start <= 127 < pitch_start + pitch_span:
+                return [_Note()]
+            return []
+
+    class _Track:
+        def __init__(self):
+            self.arrangement_clips = [_Clip()]
+
+    handler.osc_server = _Server()
+    handler.song = types.SimpleNamespace(tracks=[_Track()])
+    handler._clip_notes_cache = []
+    handler.init_api()
+
+    reply = callbacks["/live/arrangement_clip/get/notes"]((0, 0))
+
+    assert reply == (0, 0, 127, 0.0, 1.0, 100, False, 1.0)
+    assert handler.song.tracks[0].arrangement_clips[0].queried_args == (
+        0,
+        128,
+        -8192,
+        16384,
+    )
+
+
 def test_track_delete_device_handler_returns_ok_ack():
     track_module = _fresh_track_module()
     handler = track_module.TrackHandler.__new__(track_module.TrackHandler)
