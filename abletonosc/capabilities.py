@@ -40,6 +40,9 @@ CAPABILITY_GROUPS = {
     "arrangement_deltas": [
         lambda: hasattr(Live.Track.Track, "arrangement_clips"),
     ],
+    "arrangement_snapshot_chunks": [
+        lambda: hasattr(Live.Track.Track, "arrangement_clips"),
+    ],
     "clip_slot_duplicate": [
         lambda: hasattr(Live.ClipSlot.ClipSlot, "duplicate_clip_to"),
     ],

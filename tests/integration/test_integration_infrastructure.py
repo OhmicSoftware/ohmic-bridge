@@ -27,6 +27,7 @@ EXPECTED_CAPABILITY_BUCKETS = {
     "clip_automation_envelopes",
     "arrangement_clips",
     "arrangement_deltas",
+    "arrangement_snapshot_chunks",
     "clip_slot_duplicate",
     "song_scale_properties",
     "scene_tempo",

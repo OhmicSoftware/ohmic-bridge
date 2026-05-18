@@ -123,6 +123,7 @@ def test_probe_all_buckets_true_on_modern_ableton(fake_live_modern):
     assert result["song_beat_listener"] is True
     assert result["browser"] is True
     assert result["arrangement_deltas"] is True
+    assert result["arrangement_snapshot_chunks"] is True
 
 
 def test_clip_note_probability_bucket_no_longer_exists(fake_live_modern):

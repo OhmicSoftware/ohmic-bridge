@@ -282,10 +282,29 @@ class SongHandler(AbletonOSCHandler):
                 self.song, since_revision=since_revision)
             return (since_revision, json.dumps(data))
 
+        @guarded_lom_json("arrangement_snapshot_manifest")
+        def arrangement_snapshot_manifest(_):
+            data = self._arrangement_delta_cache.snapshot_manifest(self.song)
+            return (json.dumps(data),)
+
+        @guarded_lom_json("arrangement_snapshot_chunk")
+        def arrangement_snapshot_chunk(params):
+            snapshot_id = params[0]
+            chunk_index = params[1]
+            data = self._arrangement_delta_cache.snapshot_chunk(
+                snapshot_id, chunk_index)
+            return (snapshot_id, chunk_index, json.dumps(data))
+
         self.osc_server.add_handler(
             "/live/song/get/arrangement_snapshot", arrangement_snapshot)
         self.osc_server.add_handler(
             "/live/song/get/arrangement_delta", arrangement_delta)
+        self.osc_server.add_handler(
+            "/live/song/get/arrangement_snapshot_manifest",
+            arrangement_snapshot_manifest)
+        self.osc_server.add_handler(
+            "/live/song/get/arrangement_snapshot_chunk",
+            arrangement_snapshot_chunk)
 
         def song_get_track_data(params):
             """

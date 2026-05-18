@@ -182,6 +182,60 @@ def test_arrangement_delta_changes_when_arrangement_clip_notes_change(osc):
             % (final_count, baseline_count)
         )
 
+
+def test_arrangement_snapshot_chunks_roundtrip(osc):
+    baseline_count, latest_end = _arrangement_clips_baseline(osc)
+    safe_start = latest_end + 8.0
+    osc.send_message("/live/arrangement_clip/create", [TRACK_ID, safe_start, 4.0])
+    wait_one_tick()
+    clip_index = _find_clip_index_by_start(osc, safe_start)
+
+    try:
+        manifest_reply = osc.query(
+            "/live/song/get/arrangement_snapshot_manifest", [])
+        manifest = json.loads(manifest_reply[-1])
+        assert manifest["status"] == "ok"
+        assert manifest["snapshot_id"]
+        assert manifest["chunk_count"] > 0
+        assert "clips" not in manifest
+
+        chunks = []
+        for chunk_index in range(manifest["chunk_count"]):
+            chunk_reply = osc.query(
+                "/live/song/get/arrangement_snapshot_chunk",
+                [manifest["snapshot_id"], chunk_index],
+            )
+            assert chunk_reply[0] == manifest["snapshot_id"]
+            assert chunk_reply[1] == chunk_index
+            chunk = json.loads(chunk_reply[-1])
+            assert chunk["status"] == "ok"
+            assert chunk["snapshot_id"] == manifest["snapshot_id"]
+            assert chunk["revision"] == manifest["revision"]
+            assert chunk["chunk_index"] == chunk_index
+            assert chunk["chunk_count"] == manifest["chunk_count"]
+            chunks.append(chunk)
+
+        clips = {}
+        for chunk in chunks:
+            for track_key, track_clips in chunk["clips"].items():
+                clips.setdefault(track_key, []).extend(track_clips)
+        clip = clips[str(TRACK_ID)][clip_index]
+        assert clip["start"] == pytest.approx(safe_start)
+        assert clip["length"] == pytest.approx(4.0)
+        assert "end" in clip
+        assert "looping" in clip
+        assert "loop_start" in clip
+        assert "loop_end" in clip
+    finally:
+        osc.send_message("/live/arrangement_clip/delete", [TRACK_ID, clip_index])
+        wait_one_tick()
+        final_count = _arrangement_clips_baseline(osc)[0]
+        assert final_count == baseline_count, (
+            "teardown left track at %d clips (expected baseline %d)"
+            % (final_count, baseline_count)
+        )
+
+
 def _decode_arrangement_notes(reply):
     """Decode /live/arrangement_clip/get/notes reply into per-note dicts.
 

@@ -37,9 +37,21 @@ class _Track:
 
 
 class _Clip:
-    def __init__(self, color, color_index):
+    def __init__(
+        self,
+        color=None,
+        color_index=None,
+        end_time=None,
+        looping=None,
+        loop_start=None,
+        loop_end=None,
+    ):
         self.color = color
         self.color_index = color_index
+        self.end_time = end_time
+        self.looping = looping
+        self.loop_start = loop_start
+        self.loop_end = loop_end
 
 
 def _install_live_stubs():
@@ -102,5 +114,41 @@ def test_track_handler_exposes_arrangement_clip_colors_and_color_indices():
         assert manager.osc_server.handlers[
             "/live/track/get/arrangement_clips/color_index"
         ]((0,)) == (0, 7, 12)
+    finally:
+        _restore_modules(originals)
+
+
+def test_track_handler_exposes_arrangement_clip_loop_fallback_metadata():
+    originals = _install_live_stubs()
+    try:
+        from abletonosc.track import TrackHandler
+
+        song = _Song([
+            _Track([
+                _Clip(
+                    end_time=16.0,
+                    looping=True,
+                    loop_start=4.0,
+                    loop_end=12.0,
+                ),
+            ])
+        ])
+        manager = _Manager(song)
+
+        handler = TrackHandler(manager)
+        handler.song = song
+
+        assert manager.osc_server.handlers[
+            "/live/track/get/arrangement_clips/end_time"
+        ]((0,)) == (0, 16.0)
+        assert manager.osc_server.handlers[
+            "/live/track/get/arrangement_clips/looping"
+        ]((0,)) == (0, True)
+        assert manager.osc_server.handlers[
+            "/live/track/get/arrangement_clips/loop_start"
+        ]((0,)) == (0, 4.0)
+        assert manager.osc_server.handlers[
+            "/live/track/get/arrangement_clips/loop_end"
+        ]((0,)) == (0, 12.0)
     finally:
         _restore_modules(originals)

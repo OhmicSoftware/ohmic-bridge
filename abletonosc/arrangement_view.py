@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 
 SCHEMA_VERSION = 1
+MAX_ARRANGEMENT_SNAPSHOT_CHUNK_BYTES = 8192
 
 
 class ArrangementIdentityError(RuntimeError):
@@ -251,6 +253,232 @@ def build_arrangement_snapshot(song, *, revision: int) -> dict:
     return body
 
 
+def _encoded_json_size(payload: dict) -> int:
+    return len(json.dumps(payload).encode("utf-8"))
+
+
+def _snapshot_id(body: dict, revision: int) -> str:
+    digest = hashlib.sha1(
+        json.dumps(
+            {"revision": int(revision), "body": body},
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"arrangement-{int(revision)}-{digest}"
+
+
+def _snapshot_chunk(
+    clips: dict,
+    *,
+    snapshot_id: str,
+    revision: int,
+    chunk_index: int,
+    chunk_count: int,
+) -> dict:
+    return {
+        "status": "ok",
+        "schema_version": SCHEMA_VERSION,
+        "snapshot_id": snapshot_id,
+        "revision": int(revision),
+        "chunk_index": int(chunk_index),
+        "chunk_count": int(chunk_count),
+        "clips": clips,
+    }
+
+
+def _chunk_fits(
+    clips: dict,
+    *,
+    snapshot_id: str,
+    revision: int,
+    chunk_index: int,
+    chunk_count: int,
+    max_payload_bytes: int,
+) -> bool:
+    candidate = _snapshot_chunk(
+        clips,
+        snapshot_id=snapshot_id,
+        revision=revision,
+        chunk_index=chunk_index,
+        chunk_count=chunk_count,
+    )
+    return _encoded_json_size(candidate) <= int(max_payload_bytes)
+
+
+def _split_track_clip_pages(
+    track_key: str,
+    track_clips: list,
+    *,
+    snapshot_id: str,
+    revision: int,
+    first_chunk_index: int,
+    chunk_count_hint: int,
+    max_payload_bytes: int,
+) -> list[dict]:
+    pages = []
+    current_page = []
+
+    for clip in track_clips:
+        candidate_page = current_page + [clip]
+        if _chunk_fits(
+            {track_key: candidate_page},
+            snapshot_id=snapshot_id,
+            revision=revision,
+            chunk_index=first_chunk_index + len(pages),
+            chunk_count=chunk_count_hint,
+            max_payload_bytes=max_payload_bytes,
+        ):
+            current_page = candidate_page
+            continue
+
+        if current_page:
+            pages.append({track_key: current_page})
+            current_page = [clip]
+            if _chunk_fits(
+                {track_key: current_page},
+                snapshot_id=snapshot_id,
+                revision=revision,
+                chunk_index=first_chunk_index + len(pages),
+                chunk_count=chunk_count_hint,
+                max_payload_bytes=max_payload_bytes,
+            ):
+                continue
+
+        raise ValueError(
+            f"Arrangement clip for track {track_key} exceeds the snapshot "
+            "chunk byte budget."
+        )
+
+    if current_page or not track_clips:
+        pages.append({track_key: current_page})
+    return pages
+
+
+def _snapshot_chunk_clip_maps(
+    clips: dict,
+    *,
+    snapshot_id: str,
+    revision: int,
+    chunk_count_hint: int,
+    max_payload_bytes: int,
+) -> list[dict]:
+    chunks = []
+    current: dict = {}
+
+    for track_key, track_clips in clips.items():
+        candidate = dict(current)
+        candidate[track_key] = track_clips
+        if _chunk_fits(
+            candidate,
+            snapshot_id=snapshot_id,
+            revision=revision,
+            chunk_index=len(chunks),
+            chunk_count=chunk_count_hint,
+            max_payload_bytes=max_payload_bytes,
+        ):
+            current = candidate
+            continue
+
+        if current:
+            chunks.append(current)
+            current = {}
+
+        track_payload = {track_key: track_clips}
+        if _chunk_fits(
+            track_payload,
+            snapshot_id=snapshot_id,
+            revision=revision,
+            chunk_index=len(chunks),
+            chunk_count=chunk_count_hint,
+            max_payload_bytes=max_payload_bytes,
+        ):
+            current = track_payload
+            continue
+
+        chunks.extend(_split_track_clip_pages(
+            track_key,
+            track_clips,
+            snapshot_id=snapshot_id,
+            revision=revision,
+            first_chunk_index=len(chunks),
+            chunk_count_hint=chunk_count_hint,
+            max_payload_bytes=max_payload_bytes,
+        ))
+
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def build_arrangement_snapshot_chunks(
+    song,
+    *,
+    revision: int,
+    max_payload_bytes: int = MAX_ARRANGEMENT_SNAPSHOT_CHUNK_BYTES,
+) -> dict:
+    """Build a manifest plus chunked Arrangement View clip payloads."""
+    try:
+        body = _snapshot_body(song)
+    except ArrangementIdentityError as exc:
+        return _error_payload("identity_unavailable", str(exc))
+    except ArrangementNoteSignatureError as exc:
+        return _error_payload("notes_unavailable", str(exc))
+
+    revision = int(revision)
+    max_payload_bytes = int(max_payload_bytes)
+    snapshot_id = _snapshot_id(body, revision)
+    chunk_count_hint = 0
+    try:
+        while True:
+            clip_maps = _snapshot_chunk_clip_maps(
+                body.get("clips", {}),
+                snapshot_id=snapshot_id,
+                revision=revision,
+                chunk_count_hint=chunk_count_hint,
+                max_payload_bytes=max_payload_bytes,
+            )
+            if len(clip_maps) == chunk_count_hint:
+                break
+            chunk_count_hint = len(clip_maps)
+    except ValueError as exc:
+        return _error_payload("chunk_too_large", str(exc))
+
+    chunk_count = len(clip_maps)
+    chunks = [
+        _snapshot_chunk(
+            chunk_clips,
+            snapshot_id=snapshot_id,
+            revision=revision,
+            chunk_index=chunk_index,
+            chunk_count=chunk_count,
+        )
+        for chunk_index, chunk_clips in enumerate(clip_maps)
+    ]
+    for chunk in chunks:
+        if _encoded_json_size(chunk) > max_payload_bytes:
+            return _error_payload(
+                "chunk_too_large",
+                "Arrangement snapshot chunk exceeds the encoded byte budget."
+            )
+
+    manifest = {
+        key: value
+        for key, value in body.items()
+        if key != "clips"
+    }
+    manifest.update({
+        "status": "ok",
+        "schema_version": SCHEMA_VERSION,
+        "revision": revision,
+        "snapshot_id": snapshot_id,
+        "chunk_count": chunk_count,
+    })
+    return {
+        "manifest": manifest,
+        "chunks": chunks,
+    }
+
+
 def _metadata_changed(previous: dict, current: dict) -> bool:
     keys = (
         "track_names",
@@ -269,6 +497,7 @@ class ArrangementDeltaCache:
     def __init__(self):
         self._revision = 0
         self._snapshot: dict | None = None
+        self._snapshot_chunks: dict[str, list[dict]] = {}
 
     @property
     def revision(self) -> int:
@@ -280,6 +509,51 @@ class ArrangementDeltaCache:
         if snapshot.get("status") == "ok":
             self._snapshot = copy.deepcopy(snapshot)
         return snapshot
+
+    def snapshot_manifest(self, song) -> dict:
+        self._revision += 1
+        chunked = build_arrangement_snapshot_chunks(
+            song, revision=self._revision)
+        if chunked.get("status") == "error":
+            return chunked
+
+        manifest = chunked["manifest"]
+        chunks = chunked["chunks"]
+        snapshot_id = manifest["snapshot_id"]
+        self._snapshot_chunks = {snapshot_id: copy.deepcopy(chunks)}
+
+        clips = {}
+        for chunk in chunks:
+            for track_key, track_clips in chunk.get("clips", {}).items():
+                clips.setdefault(track_key, []).extend(track_clips)
+        snapshot = copy.deepcopy(manifest)
+        snapshot["clips"] = clips
+        self._snapshot = snapshot
+        return copy.deepcopy(manifest)
+
+    def snapshot_chunk(self, snapshot_id, chunk_index) -> dict:
+        snapshot_id = str(snapshot_id)
+        chunks = self._snapshot_chunks.get(snapshot_id)
+        if chunks is None:
+            return _error_payload(
+                "unknown_snapshot",
+                "Arrangement snapshot is not available.",
+            )
+
+        try:
+            index = int(chunk_index)
+        except (TypeError, ValueError):
+            return _error_payload(
+                "invalid_chunk_index",
+                "Arrangement snapshot chunk index is invalid.",
+            )
+
+        if index < 0 or index >= len(chunks):
+            return _error_payload(
+                "invalid_chunk_index",
+                "Arrangement snapshot chunk index is out of range.",
+            )
+        return copy.deepcopy(chunks[index])
 
     def delta(self, song, *, since_revision: int) -> dict:
         if self._snapshot is None or int(since_revision) != self._revision:
