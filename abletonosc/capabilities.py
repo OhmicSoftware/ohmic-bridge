@@ -67,6 +67,9 @@ CAPABILITY_GROUPS = {
     "song_beat_listener": [
         lambda: hasattr(Live.Song.Song, "add_current_song_time_listener"),
     ],
+    "song_device_move": [
+        lambda: hasattr(Live.Song.Song, "move_device"),
+    ],
     "browser": [
         lambda: hasattr(Live.Application.get_application(), "browser"),
     ],

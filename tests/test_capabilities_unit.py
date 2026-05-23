@@ -47,6 +47,7 @@ def fake_live_modern():
             "scale_name": "",
             "cue_points": [],
             "add_current_song_time_listener": lambda *a: None,
+            "move_device": lambda *a: None,
         })
         live.Scene = types.ModuleType("Live.Scene")
         live.Scene.Scene = type("Scene", (), {
@@ -121,6 +122,7 @@ def test_probe_all_buckets_true_on_modern_ableton(fake_live_modern):
     assert result["device_parameter_value_strings"] is True
     assert result["song_cue_points"] is True
     assert result["song_beat_listener"] is True
+    assert result["song_device_move"] is True
     assert result["browser"] is True
     assert result["arrangement_deltas"] is True
     assert result["arrangement_snapshot_chunks"] is True
@@ -167,6 +169,13 @@ def test_probe_returns_false_when_extended_api_is_missing(fake_live_modern):
     capabilities = _import_fresh_capabilities()
     result = capabilities.probe_capabilities()
     assert result["clip_notes_rw"] is False
+
+
+def test_song_device_move_requires_move_device(fake_live_modern):
+    delattr(fake_live_modern.Song.Song, "move_device")
+    capabilities = _import_fresh_capabilities()
+    result = capabilities.probe_capabilities()
+    assert result["song_device_move"] is False
 
 
 def test_probe_catches_exception_per_bucket(fake_live_modern):

@@ -4,7 +4,7 @@ Pre-release gate for the Ohmic Bridge. Run these tests against a real Ableton Li
 
 ## What they cover
 
-**58 tests across 14 files, covering every OSC endpoint Ohmic's MCP server sends to the Bridge.** Each test creates a known shape in Ableton, performs an operation via the OSC endpoint, reads the result back, and asserts every field matches the expected value byte-for-byte. Any drift in an Ableton API (signature change, return shape change, new required argument) or in the Bridge's wire contract will fail at least one test long before a user's session silently breaks.
+**Focused tests cover every OSC endpoint Ohmic's MCP server sends to the Bridge.** Each test creates a known shape in Ableton, performs an operation via the OSC endpoint, reads the result back, and asserts the endpoint-specific wire fields and resulting Live state. Any drift in an Ableton API (signature change, return shape change, new required argument) or in the Bridge's wire contract will fail at least one test long before a user's session silently breaks.
 
 **Every test owns its state.** Tests that need an empty MIDI track create one via `/live/song/create_midi_track` and delete it on teardown. Tests that need a clip at a specific slot create it via `/live/clip_slot/create_clip`. Tests that need a device to operate on load it first. This means the suite runs green against any Live project — there are no project-state skips.
 
@@ -71,7 +71,7 @@ tests/integration/
 ├── test_integration_session_info.py      # JSON-returning aggregate handlers
 ├── test_integration_song_scale.py        # song_scale_properties bucket
 ├── test_integration_song_transport.py    # transport, tempo, num_scenes, track_names, create tracks/scenes
-├── test_integration_track.py             # track name/mute/devices/delete_device
+├── test_integration_track.py             # track name/mute/devices/delete_device/move_device
 └── test_integration_view.py              # view selected_clip roundtrip
 ```
 
