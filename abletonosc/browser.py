@@ -11,6 +11,8 @@ logger = logging.getLogger("abletonosc")
 # Only categories where hasattr(browser, name) is True will be reported as supported.
 CATEGORY_MAP = {
     "instruments": "instruments",
+    "audio_effects": "audio_effects",
+    "midi_effects": "midi_effects",
     "plugins": "plugins",
     "instrument_racks": "user_library",
     "drum_racks": "user_library",
@@ -38,6 +40,23 @@ MAX_FOR_LIVE_UNSUPPORTED_ERROR = "error: Max for Live is not supported by this A
 
 def _is_preset_category(category):
     return category in PRESET_CATEGORIES
+
+
+def _device_names(track):
+    try:
+        return tuple(str(device.name) for device in track.devices)
+    except Exception:
+        return ()
+
+
+def _find_inserted_device_index(before, after):
+    if len(after) <= len(before):
+        return -1
+    for index in range(len(after)):
+        candidate = after[:index] + after[index + 1:]
+        if candidate == before:
+            return index
+    return -1
 
 
 def _max_for_live_supported(browser):
@@ -569,57 +588,114 @@ class BrowserHandler(AbletonOSCHandler):
                 return ("error: track_index must be an integer",)
             category_str = str(params[1])
             item_query = str(params[2])
+            positioned_load = len(params) >= 4
+            insert_mode = str(params[3]).strip().lower() if positioned_load else ""
+            anchor_device_index = -1
+            if positioned_load and len(params) >= 5:
+                try:
+                    anchor_device_index = int(params[4])
+                except (ValueError, TypeError):
+                    return (track_index, category_str, item_query, insert_mode,
+                            -1, "error: device_index must be an integer")
             logger.info("browser/load called: track=%d, category=%s, item=%s"
                         % (track_index, category_str, item_query))
 
+            insert_mode_values = {
+                "append": 0,
+                "before": 1,
+                "after": 2,
+            }
+
+            def load_error(message):
+                if positioned_load:
+                    return (track_index, category_str, item_query, insert_mode,
+                            anchor_device_index, "error: " + str(message))
+                return ("error: " + str(message),)
+
+            if positioned_load and insert_mode not in insert_mode_values:
+                return load_error("insert_mode must be append, before, or after")
+            if (positioned_load and insert_mode in ("before", "after") and
+                    anchor_device_index < 0):
+                return load_error("before/after insert_mode requires device_index")
+
             browser = self._get_browser()
             if browser is None:
-                return ("error: browser API not available",)
+                return load_error("browser API not available")
 
             unsupported_error = _max_for_live_unsupported_error(category_str, browser)
             if unsupported_error is not None:
+                if positioned_load:
+                    return load_error(str(unsupported_error[0]).replace("error: ", "", 1))
                 return unsupported_error
 
             if not hasattr(browser, "load_item"):
-                return ("error: browser.load_item not available",)
+                return load_error("browser.load_item not available")
 
             attr_name = CATEGORY_MAP.get(category_str)
             if attr_name is None:
-                return ("error: unknown category '%s'" % category_str,)
+                return load_error("unknown category '%s'" % category_str)
             if not hasattr(browser, attr_name):
-                return ("error: category '%s' not supported" % category_str,)
+                return load_error("category '%s' not supported" % category_str)
 
             target = _find_loadable_for_browser_category(
                 browser, item_query, category_str
             )
 
             if target is None:
-                return ("error: item '%s' not found in %s" % (item_query, category_str),)
+                return load_error("item '%s' not found in %s" % (item_query, category_str))
 
             try:
                 is_loadable = target.is_loadable
             except Exception:
                 is_loadable = False
             if not is_loadable:
-                return ("error: item '%s' is not loadable (it may be a folder)" % item_query,)
+                return load_error("item '%s' is not loadable (it may be a folder)" % item_query)
 
             # Select the target track
             try:
                 tracks = self.song.tracks
                 if track_index < 0 or track_index >= len(tracks):
                     return ("error: track_index %d out of range (0-%d)" % (track_index, len(tracks) - 1),)
-                self.song.view.selected_track = tracks[track_index]
+                track = tracks[track_index]
+                self.song.view.selected_track = track
             except Exception as e:
                 logger.error("Failed to select track %d: %s" % (track_index, e))
-                return ("error: failed to select track %d" % track_index,)
+                return load_error("failed to select track %d" % track_index)
 
             # Count devices before loading (skip for presets — they modify
             # an existing device rather than adding a new one)
+            previous_insert_mode = None
+            if positioned_load:
+                try:
+                    if not hasattr(track, "view"):
+                        return load_error("track.view is not available")
+                    if not hasattr(track.view, "device_insert_mode"):
+                        return load_error("device_insert_mode not available")
+                    previous_insert_mode = track.view.device_insert_mode
+                    if insert_mode in ("before", "after"):
+                        device_count = len(track.devices)
+                        if (anchor_device_index < 0 or
+                                anchor_device_index >= device_count):
+                            return load_error(
+                                "device_index %d out of range (0-%d)"
+                                % (anchor_device_index, device_count - 1)
+                            )
+                        self.song.view.select_device(
+                            track.devices[anchor_device_index]
+                        )
+                    track.view.device_insert_mode = insert_mode_values[insert_mode]
+                except Exception as e:
+                    logger.error("Failed to prepare positioned browser load: %s" % e)
+                    return load_error(
+                        "failed to prepare positioned load: %s" % str(e)
+                    )
+
             is_preset = _is_preset_category(category_str)
             device_count_before = -1
+            before_names = _device_names(track) if positioned_load else ()
             if not is_preset:
                 try:
-                    device_count_before = len(tracks[track_index].devices)
+                    device_count_before = len(track.devices)
                 except Exception:
                     pass
 
@@ -629,19 +705,40 @@ class BrowserHandler(AbletonOSCHandler):
                 logger.info("browser.load_item succeeded for '%s'" % item_query)
             except Exception as e:
                 logger.error("browser.load_item failed: %s" % e)
-                return ("error: load_item failed: %s" % str(e),)
+                return load_error("load_item failed: %s" % str(e))
+            finally:
+                if positioned_load and previous_insert_mode is not None:
+                    try:
+                        track.view.device_insert_mode = previous_insert_mode
+                    except Exception as e:
+                        logger.warning("Failed to restore device_insert_mode: %s" % e)
 
             # Verify device count increased (only for non-preset categories)
+            after_names = _device_names(track) if positioned_load else ()
             if device_count_before >= 0:
                 try:
-                    device_count_after = len(tracks[track_index].devices)
+                    device_count_after = len(track.devices)
                 except Exception:
                     device_count_after = -1
                 if device_count_after >= 0 and device_count_after <= device_count_before:
                     logger.warning("Device count did not increase after load_item "
                                    "(before=%d, after=%d)" % (device_count_before, device_count_after))
+                    if positioned_load:
+                        actual_index = _find_inserted_device_index(
+                            before_names, after_names
+                        )
+                        return (track_index, category_str, item_query,
+                                insert_mode, anchor_device_index,
+                                "warning: load_item completed but device count unchanged - "
+                                "item may not have loaded correctly",
+                                actual_index, *after_names)
                     return ("warning: load_item completed but device count unchanged — "
                             "item may not have loaded correctly",)
+
+            if positioned_load:
+                actual_index = _find_inserted_device_index(before_names, after_names)
+                return (track_index, category_str, item_query, insert_mode,
+                        anchor_device_index, "ok", actual_index, *after_names)
 
             # Echo request params first so Ohmic's prefix key matching works
             return (track_index, category_str, item_query, "ok")

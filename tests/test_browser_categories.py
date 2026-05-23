@@ -71,6 +71,8 @@ def browser_module():
 
 def test_category_map_exposes_ohmic_keys(browser_module):
     assert browser_module.CATEGORY_MAP["instruments"] == "instruments"
+    assert browser_module.CATEGORY_MAP["audio_effects"] == "audio_effects"
+    assert browser_module.CATEGORY_MAP["midi_effects"] == "midi_effects"
     assert browser_module.CATEGORY_MAP["plugins"] == "plugins"
     assert browser_module.CATEGORY_MAP["instrument_racks"] == "user_library"
     assert browser_module.CATEGORY_MAP["drum_racks"] == "user_library"
