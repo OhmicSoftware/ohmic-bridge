@@ -1,9 +1,13 @@
 import Live
+import json as _json
 import logging
 import os
+from pathlib import Path
+from pathlib import PureWindowsPath
 import sys
 from typing import Tuple, Optional
-from .handler import AbletonOSCHandler, guarded_lom
+from . import browser_metadata
+from .handler import AbletonOSCHandler, guarded_lom, guarded_lom_json
 
 logger = logging.getLogger("abletonosc")
 
@@ -71,6 +75,9 @@ def _max_for_live_unsupported_error(category, browser):
 
 MAX_DEPTH = 5
 MAX_RESULTS = 500
+MAX_METADATA_PAGE_LIMIT = 25
+MAX_METADATA_PAGE_BYTES = 45000
+MAX_METADATA_BROWSER_PATH_CHARS = 1024
 MAX_FOR_LIVE_COMPOSITE_ATTRS = (
     "max_for_live",
     "audio_effects",
@@ -105,6 +112,64 @@ def _get_children(item):
 
 def _normalise_browser_path(path):
     return str(path).replace("\\", "/").strip()
+
+
+def _safe_browser_relative_path(path):
+    text = str(path).strip()
+    normalised = _normalise_browser_path(text)
+    if not normalised:
+        return None
+    if normalised.startswith("/") or normalised.startswith("//"):
+        return None
+    windows_path = PureWindowsPath(text)
+    if windows_path.is_absolute() or windows_path.drive:
+        return None
+    parts = [part for part in normalised.split("/") if part]
+    if any(part in (".", "..") for part in parts):
+        return None
+    return "/".join(parts)
+
+
+def _safe_output_browser_path(path):
+    text = _normalise_browser_path(path)
+    relative_path = _safe_browser_relative_path(text)
+    if relative_path:
+        safe_path = relative_path
+    else:
+        windows_leaf = PureWindowsPath(str(path)).name
+        safe_path = windows_leaf or text.strip("/").rsplit("/", 1)[-1].strip()
+    if not safe_path:
+        safe_path = "unknown"
+    if len(safe_path) > MAX_METADATA_BROWSER_PATH_CHARS:
+        leaf = safe_path.rsplit("/", 1)[-1]
+        safe_path = leaf if len(leaf) <= MAX_METADATA_BROWSER_PATH_CHARS else leaf[:MAX_METADATA_BROWSER_PATH_CHARS]
+    return safe_path
+
+
+def _canonical_inside_root(root, candidate):
+    try:
+        root_resolved = Path(root).resolve(strict=True)
+        candidate_resolved = Path(candidate).resolve(strict=True)
+    except OSError:
+        return None
+
+    try:
+        common = os.path.commonpath([
+            os.path.normcase(os.fspath(root_resolved)),
+            os.path.normcase(os.fspath(candidate_resolved)),
+        ])
+    except (OSError, ValueError):
+        return None
+    if common != os.path.normcase(os.fspath(root_resolved)):
+        return None
+    return candidate_resolved
+
+
+def _relative_to_root(root, candidate):
+    try:
+        return _normalise_browser_path(Path(candidate).relative_to(Path(root)))
+    except ValueError:
+        return ""
 
 
 def _path_parts(path):
@@ -248,6 +313,210 @@ def _path_matches_category(path, category):
     if category not in USER_LIBRARY_CATEGORIES:
         return True
     return _category_for_user_library_path(path) == category
+
+
+def _resolve_user_library_file(root, browser_path, category):
+    relative_path = _safe_browser_relative_path(browser_path)
+    if not relative_path:
+        return None
+    if category not in USER_LIBRARY_CATEGORIES:
+        return None
+
+    root_path = Path(root)
+    candidate = root_path.joinpath(*relative_path.split("/"))
+    if not browser_metadata.is_supported_file_backed_extension(candidate):
+        return None
+
+    candidate_resolved = _canonical_inside_root(root_path, candidate)
+    if candidate_resolved is None or not candidate_resolved.is_file():
+        return None
+
+    root_resolved = Path(root_path).resolve(strict=True)
+    resolved_relative = _relative_to_root(root_resolved, candidate_resolved)
+    if _category_for_user_library_path(resolved_relative) != category:
+        return None
+    return candidate_resolved
+
+
+def _safe_missing_user_library_file_expected(root, browser_path, category):
+    relative_path = _safe_browser_relative_path(browser_path)
+    if not relative_path or category not in USER_LIBRARY_CATEGORIES:
+        return False
+    candidate = Path(root).joinpath(*relative_path.split("/"))
+    if not browser_metadata.is_supported_file_backed_extension(candidate):
+        return False
+    existing_parent = candidate.parent
+    while not existing_parent.exists() and existing_parent != existing_parent.parent:
+        existing_parent = existing_parent.parent
+    if _canonical_inside_root(root, existing_parent) is None:
+        return False
+    return _category_for_user_library_path(relative_path) == category
+
+
+def _build_user_library_amxd_stem_index(root):
+    root_path = Path(root)
+    if not root_path.is_dir():
+        return {}
+    index = {}
+    try:
+        root_resolved = root_path.resolve(strict=True)
+        for candidate in root_path.rglob("*.amxd"):
+            stem = _max_for_live_stem(candidate.name)
+            if not stem:
+                continue
+            candidate_resolved = _canonical_inside_root(root_path, candidate)
+            if candidate_resolved is None or not candidate_resolved.is_file():
+                continue
+            resolved_relative = _relative_to_root(root_resolved, candidate_resolved)
+            if _category_for_user_library_path(resolved_relative) == "user_library_max_for_live":
+                index.setdefault(stem, []).append(candidate_resolved)
+    except Exception as exc:
+        logger.warning("Failed to scan User Library Max for Live files: %s", exc)
+    return index
+
+
+def _find_user_library_amxd_stem_matches(root, browser_path, stem_index=None):
+    target_stem = _max_for_live_stem(browser_path)
+    if not target_stem:
+        return []
+    if stem_index is None:
+        stem_index = _build_user_library_amxd_stem_index(root)
+    return list(stem_index.get(target_stem, ()))
+
+
+def _base_metadata_item(browser_path, metadata_status, file_backed_expected, file_exists):
+    safe_path = _safe_output_browser_path(browser_path)
+    return {
+        "browser_path": safe_path,
+        "name": safe_path.rsplit("/", 1)[-1],
+        "metadata_status": metadata_status,
+        "file_backed_expected": bool(file_backed_expected),
+        "file_exists": bool(file_exists),
+    }
+
+
+def _file_metadata_status(metadata):
+    return "file_backed" if metadata.get("file_id") else "hash_only"
+
+
+def _metadata_item_for_browser_path(root, category, browser_path, hash_budget, max_for_live_stem_index=None):
+    safe_path = _normalise_browser_path(browser_path)
+    output_path = _safe_output_browser_path(browser_path)
+    if not root or category not in USER_LIBRARY_CATEGORIES:
+        return _base_metadata_item(output_path, "path_only", False, False)
+
+    resolved = _resolve_user_library_file(root, safe_path, category)
+    if resolved is not None:
+        metadata = browser_metadata.metadata_for_file(
+            resolved,
+            category,
+            safe_path,
+            hash_budget=hash_budget,
+        )
+        if metadata:
+            status = _file_metadata_status(metadata)
+            item = _base_metadata_item(output_path, status, True, True)
+            item.update(metadata)
+            item["browser_path"] = output_path
+            item["name"] = output_path.rsplit("/", 1)[-1]
+            item["metadata_status"] = status
+            item["file_backed_expected"] = True
+            item["file_exists"] = True
+            return item
+
+    if category == "user_library_max_for_live":
+        matches = _find_user_library_amxd_stem_matches(
+            root, safe_path, stem_index=max_for_live_stem_index
+        )
+        if len(matches) == 1:
+            metadata = browser_metadata.metadata_for_file(
+                matches[0],
+                category,
+                safe_path,
+                hash_budget=hash_budget,
+            )
+            if metadata:
+                status = _file_metadata_status(metadata)
+                item = _base_metadata_item(output_path, status, True, True)
+                item.update(metadata)
+                item["browser_path"] = output_path
+                item["name"] = output_path.rsplit("/", 1)[-1]
+                item["metadata_status"] = status
+                item["file_backed_expected"] = True
+                item["file_exists"] = True
+                return item
+        if len(matches) > 1:
+            return _base_metadata_item(output_path, "ambiguous_file_match", False, False)
+
+    if _safe_missing_user_library_file_expected(root, safe_path, category):
+        return _base_metadata_item(output_path, "stale_missing_file", True, False)
+
+    return _base_metadata_item(output_path, "path_only", False, False)
+
+
+def _json_payload_size(payload):
+    return len(_json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+
+def _metadata_for_category_items(browser, category, offset=0, limit=MAX_METADATA_PAGE_LIMIT, paths=None):
+    try:
+        offset = max(0, int(offset))
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = MAX_METADATA_PAGE_LIMIT
+    limit = max(0, min(limit, MAX_METADATA_PAGE_LIMIT))
+
+    all_paths = list(paths) if paths is not None else _collect_category_items(browser, category)
+    total = len(all_paths)
+    if limit == 0:
+        return {
+            "category": category,
+            "offset": offset,
+            "limit": limit,
+            "total": total,
+            "next_offset": offset + 1 if offset < total else None,
+            "items": [],
+        }
+    selected_paths = all_paths[offset:offset + limit]
+    root = _bridge_user_library_root()
+    max_for_live_stem_index = None
+    if root and category == "user_library_max_for_live":
+        max_for_live_stem_index = _build_user_library_amxd_stem_index(root)
+    hash_budget = {
+        "remaining_bytes": browser_metadata.MAX_METADATA_HASH_BYTES_PER_CALL,
+    }
+    payload = {
+        "category": category,
+        "offset": offset,
+        "limit": limit,
+        "total": total,
+        "next_offset": None,
+        "items": [],
+    }
+
+    consumed = 0
+    for path in selected_paths:
+        item = _metadata_item_for_browser_path(
+            root,
+            category,
+            path,
+            hash_budget,
+            max_for_live_stem_index=max_for_live_stem_index,
+        )
+        candidate = dict(payload)
+        candidate["items"] = list(payload["items"]) + [item]
+        if _json_payload_size(candidate) > MAX_METADATA_PAGE_BYTES and payload["items"]:
+            break
+        payload["items"].append(item)
+        consumed += 1
+
+    next_offset = offset + consumed
+    if next_offset < total:
+        payload["next_offset"] = next_offset
+    return payload
 
 
 def _path_matches_installed_max_for_live(path):
@@ -573,6 +842,49 @@ class BrowserHandler(AbletonOSCHandler):
             return (category_str, *results)
 
         self.osc_server.add_handler("/live/browser/get/names", get_names)
+
+        # ------------------------------------------------------------------
+        # /live/browser/get/metadata_page  (category_str, offset=0, limit=25)
+        # ------------------------------------------------------------------
+        @guarded_lom_json("browser_get_metadata_page")
+        def get_metadata_page(params):
+            if not params or len(params) < 1:
+                return (_json.dumps({"error": "category parameter required"}),)
+            category_str = str(params[0])
+            try:
+                offset = int(params[1]) if len(params) >= 2 else 0
+            except (ValueError, TypeError):
+                return (_json.dumps({"error": "offset must be an integer"}),)
+            try:
+                limit = int(params[2]) if len(params) >= 3 else MAX_METADATA_PAGE_LIMIT
+            except (ValueError, TypeError):
+                return (_json.dumps({"error": "limit must be an integer"}),)
+
+            browser = self._get_browser()
+            if browser is None:
+                return (_json.dumps({"error": "browser API not available"}),)
+
+            unsupported_error = _max_for_live_unsupported_error(category_str, browser)
+            if unsupported_error is not None:
+                return (_json.dumps({"error": str(unsupported_error[0])}),)
+
+            attr_name = CATEGORY_MAP.get(category_str)
+            if attr_name is None:
+                return (_json.dumps({"error": "unknown category '%s'" % category_str}),)
+            if not hasattr(browser, attr_name):
+                return (_json.dumps({"error": "category '%s' not supported" % category_str}),)
+
+            payload = _metadata_for_category_items(
+                browser,
+                category_str,
+                offset=offset,
+                limit=limit,
+            )
+            return (_json.dumps(payload, sort_keys=True, separators=(",", ":")),)
+
+        self.osc_server.add_handler(
+            "/live/browser/get/metadata_page", get_metadata_page
+        )
 
         # ------------------------------------------------------------------
         # /live/browser/load  (track_index, category_str, item_name_or_path)

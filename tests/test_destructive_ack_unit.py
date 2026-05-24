@@ -1,4 +1,4 @@
-"""Unit tests for Bridge 0.4.0 destructive-operation acknowledgements."""
+"""Unit tests for Bridge 0.5.0 destructive-operation acknowledgements."""
 
 import importlib
 from pathlib import Path
@@ -77,9 +77,9 @@ def _fresh_track_module():
     return importlib.reload(module)
 
 
-def test_bridge_version_is_0_4_0():
+def test_bridge_version_is_0_5_0():
     manager = _fresh_manager_module()
-    assert manager.BRIDGE_VERSION == (0, 4, 0)
+    assert manager.BRIDGE_VERSION == (0, 5, 0)
 
 
 def test_ableton_stub_repairs_existing_incomplete_control_surface_module():

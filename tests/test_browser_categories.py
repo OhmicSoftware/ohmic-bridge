@@ -1,5 +1,7 @@
 import importlib
+import json
 from pathlib import Path
+import subprocess
 import sys
 import types
 
@@ -355,3 +357,543 @@ def test_find_loadable_for_category_continues_past_mismatched_bare_name(browser_
     )
     assert target is not None
     assert target.name == "SharedName.adg"
+
+
+def test_resolve_user_library_browser_path_rejects_unsafe_paths(browser_module, tmp_path):
+    root = tmp_path / "User Library"
+    root.mkdir()
+
+    unsafe_paths = [
+        "../outside.adg",
+        "/tmp/outside.adg",
+        r"C:\outside.adg",
+        r"\\server\share\outside.adg",
+    ]
+
+    for browser_path in unsafe_paths:
+        result = browser_module._resolve_user_library_file(
+            root,
+            browser_path,
+            "instrument_racks",
+        )
+        assert result is None
+
+
+def test_resolve_user_library_browser_path_returns_existing_supported_file(
+    browser_module, tmp_path
+):
+    root = tmp_path / "User Library"
+    target = root / "Presets" / "Instruments" / "Instrument Rack" / "Warm Pad.adg"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"payload")
+
+    result = browser_module._resolve_user_library_file(
+        root,
+        "Presets/Instruments/Instrument Rack/Warm Pad.adg",
+        "instrument_racks",
+    )
+
+    assert result == target
+
+
+def test_resolve_user_library_browser_path_rejects_symlink_escape(
+    browser_module, tmp_path
+):
+    root = tmp_path / "User Library"
+    outside = tmp_path / "Outside"
+    outside.mkdir()
+    escaped = outside / "Escaped.adg"
+    escaped.write_bytes(b"payload")
+    link = root / "Presets" / "Instruments" / "Instrument Rack"
+    link.parent.mkdir(parents=True)
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip("could not create symlink: %s" % exc)
+
+    result = browser_module._resolve_user_library_file(
+        root,
+        "Presets/Instruments/Instrument Rack/Escaped.adg",
+        "instrument_racks",
+    )
+
+    assert result is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows junction escape")
+def test_resolve_user_library_browser_path_rejects_windows_junction_escape(
+    browser_module, tmp_path
+):
+    root = tmp_path / "User Library"
+    outside = tmp_path / "Outside"
+    outside.mkdir()
+    escaped = outside / "Escaped.adg"
+    escaped.write_bytes(b"payload")
+    junction = root / "Presets" / "Instruments" / "Instrument Rack"
+    junction.parent.mkdir(parents=True)
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.skip("could not create junction: %s" % result.stderr)
+
+    resolved = browser_module._resolve_user_library_file(
+        root,
+        "Presets/Instruments/Instrument Rack/Escaped.adg",
+        "instrument_racks",
+    )
+
+    assert resolved is None
+
+
+def test_resolve_user_library_browser_path_rejects_category_mismatch(
+    browser_module, tmp_path
+):
+    root = tmp_path / "User Library"
+    target = root / "Presets" / "Instruments" / "Operator" / "Lead.adv"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"payload")
+
+    result = browser_module._resolve_user_library_file(
+        root,
+        "Presets/Instruments/Operator/Lead.adv",
+        "instrument_racks",
+    )
+
+    assert result is None
+
+
+def test_metadata_marks_missing_supported_user_library_file_stale(
+    browser_module, tmp_path, monkeypatch
+):
+    root = tmp_path / "User Library"
+    root.mkdir()
+    monkeypatch.setattr(browser_module, "_bridge_user_library_root", lambda: str(root))
+
+    payload = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="instrument_racks",
+        offset=0,
+        limit=10,
+        paths=["Presets/Instruments/Instrument Rack/Missing.adg"],
+    )
+
+    item = payload["items"][0]
+    assert item["browser_path"] == "Presets/Instruments/Instrument Rack/Missing.adg"
+    assert item["name"] == "Missing.adg"
+    assert item["metadata_status"] == "stale_missing_file"
+    assert item["file_backed_expected"] is True
+    assert item["file_exists"] is False
+
+
+def test_max_for_live_display_path_resolves_unambiguous_amxd_stem(
+    browser_module, tmp_path, monkeypatch
+):
+    root = tmp_path / "User Library"
+    amxd = (
+        root
+        / "Presets"
+        / "Audio Effects"
+        / "Max Audio Effect"
+        / "Ohmic Metadata Test Max Device.amxd"
+    )
+    amxd.parent.mkdir(parents=True)
+    amxd.write_bytes(b"payload")
+    monkeypatch.setattr(browser_module, "_bridge_user_library_root", lambda: str(root))
+    monkeypatch.setattr(
+        browser_module.browser_metadata,
+        "metadata_for_file",
+        lambda path, category, browser_path, hash_budget=None: {
+            "browser_path": browser_path,
+            "name": Path(path).name,
+            "extension": ".amxd",
+            "category": category,
+            "size": 7,
+            "mtime_ns": 123,
+            "file_id": "fileid:test",
+            "sha256": "abc",
+            "sha256_status": "ready",
+        },
+    )
+
+    payload = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="user_library_max_for_live",
+        offset=0,
+        limit=10,
+        paths=["Max Audio Effect/Ohmic Metadata Test Max Device"],
+    )
+
+    item = payload["items"][0]
+    assert item["metadata_status"] == "file_backed"
+    assert item["file_backed_expected"] is True
+    assert item["file_exists"] is True
+    assert item["extension"] == ".amxd"
+    assert item["file_id"] == "fileid:test"
+    assert str(root) not in repr(item)
+
+
+def test_max_for_live_ambiguous_display_stem_marks_ambiguous(
+    browser_module, tmp_path, monkeypatch
+):
+    root = tmp_path / "User Library"
+    first = root / "A" / "IMG.amxd"
+    second = root / "B" / "IMG.amxd"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    first.write_bytes(b"payload")
+    second.write_bytes(b"payload")
+    monkeypatch.setattr(browser_module, "_bridge_user_library_root", lambda: str(root))
+
+    payload = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="user_library_max_for_live",
+        offset=0,
+        limit=10,
+        paths=["Max Audio Effect/IMG"],
+    )
+
+    item = payload["items"][0]
+    assert item["metadata_status"] == "ambiguous_file_match"
+    assert item["file_backed_expected"] is False
+    assert item["file_exists"] is False
+    assert "file_id" not in item
+    assert str(root) not in repr(item)
+
+
+def test_max_for_live_no_match_display_path_remains_path_only(
+    browser_module, tmp_path, monkeypatch
+):
+    root = tmp_path / "User Library"
+    root.mkdir()
+    monkeypatch.setattr(browser_module, "_bridge_user_library_root", lambda: str(root))
+
+    payload = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="user_library_max_for_live",
+        offset=0,
+        limit=10,
+        paths=["Max Audio Effect/Display Only"],
+    )
+
+    item = payload["items"][0]
+    assert item["metadata_status"] == "path_only"
+    assert item["file_backed_expected"] is False
+    assert item["file_exists"] is False
+
+
+def test_max_for_live_metadata_page_scans_amxd_files_once_per_page(
+    browser_module, tmp_path, monkeypatch
+):
+    root = tmp_path / "User Library"
+    folder = root / "Presets" / "Audio Effects" / "Max Audio Effect"
+    folder.mkdir(parents=True)
+    for name in ("One.amxd", "Two.amxd", "Three.amxd"):
+        (folder / name).write_bytes(b"payload")
+    calls = []
+    real_rglob = browser_module.Path.rglob
+
+    def counting_rglob(path, pattern):
+        calls.append((path, pattern))
+        return real_rglob(path, pattern)
+
+    monkeypatch.setattr(browser_module.Path, "rglob", counting_rglob)
+    monkeypatch.setattr(browser_module, "_bridge_user_library_root", lambda: str(root))
+
+    payload = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="user_library_max_for_live",
+        offset=0,
+        limit=10,
+        paths=[
+            "Max Audio Effect/One",
+            "Max Audio Effect/Two",
+            "Max Audio Effect/Three",
+        ],
+    )
+
+    assert [item["metadata_status"] for item in payload["items"]] == [
+        "file_backed",
+        "file_backed",
+        "file_backed",
+    ]
+    assert calls == [(root, "*.amxd")]
+
+
+def test_file_backed_item_without_file_id_is_hash_only(
+    browser_module, tmp_path, monkeypatch
+):
+    root = tmp_path / "User Library"
+    target = root / "Presets" / "Instruments" / "Instrument Rack" / "Warm Pad.adg"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"payload")
+    monkeypatch.setattr(browser_module, "_bridge_user_library_root", lambda: str(root))
+    monkeypatch.setattr(
+        browser_module.browser_metadata,
+        "metadata_for_file",
+        lambda path, category, browser_path, hash_budget=None: {
+            "browser_path": browser_path,
+            "name": Path(path).name,
+            "extension": ".adg",
+            "category": category,
+            "size": 7,
+            "mtime_ns": 123,
+            "file_id": None,
+            "sha256": "abc",
+            "sha256_status": "ready",
+        },
+    )
+
+    payload = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="instrument_racks",
+        offset=0,
+        limit=10,
+        paths=["Presets/Instruments/Instrument Rack/Warm Pad.adg"],
+    )
+
+    item = payload["items"][0]
+    assert item["metadata_status"] == "hash_only"
+    assert item["file_backed_expected"] is True
+    assert item["file_exists"] is True
+    assert item["file_id"] is None
+
+
+def test_max_for_live_stem_item_without_file_id_is_hash_only(
+    browser_module, tmp_path, monkeypatch
+):
+    root = tmp_path / "User Library"
+    target = root / "Presets" / "Audio Effects" / "Max Audio Effect" / "IMG.amxd"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"payload")
+    monkeypatch.setattr(browser_module, "_bridge_user_library_root", lambda: str(root))
+    monkeypatch.setattr(
+        browser_module.browser_metadata,
+        "metadata_for_file",
+        lambda path, category, browser_path, hash_budget=None: {
+            "browser_path": browser_path,
+            "name": Path(path).name,
+            "extension": ".amxd",
+            "category": category,
+            "size": 7,
+            "mtime_ns": 123,
+            "file_id": None,
+            "sha256": "abc",
+            "sha256_status": "ready",
+        },
+    )
+
+    payload = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="user_library_max_for_live",
+        offset=0,
+        limit=10,
+        paths=["Max Audio Effect/IMG"],
+    )
+
+    item = payload["items"][0]
+    assert item["metadata_status"] == "hash_only"
+    assert item["file_backed_expected"] is True
+    assert item["file_exists"] is True
+    assert item["file_id"] is None
+
+
+def test_metadata_page_payload_stays_below_page_byte_limit(
+    browser_module, tmp_path, monkeypatch
+):
+    root = tmp_path / "User Library"
+    rack_dir = root / "Presets" / "Instruments" / "Instrument Rack"
+    rack_dir.mkdir(parents=True)
+    paths = []
+    for index in range(browser_module.MAX_METADATA_PAGE_LIMIT + 5):
+        browser_path = "Presets/Instruments/Instrument Rack/Preset %02d.adg" % index
+        (rack_dir / ("Preset %02d.adg" % index)).write_bytes(b"payload")
+        paths.append(browser_path)
+    monkeypatch.setattr(browser_module, "_bridge_user_library_root", lambda: str(root))
+
+    payload = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="instrument_racks",
+        offset=0,
+        limit=browser_module.MAX_METADATA_PAGE_LIMIT,
+        paths=paths,
+    )
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    assert len(payload["items"]) == browser_module.MAX_METADATA_PAGE_LIMIT
+    assert len(encoded.encode("utf-8")) <= browser_module.MAX_METADATA_PAGE_BYTES
+
+
+def test_metadata_items_sanitize_absolute_paths_for_path_only_stale_and_ambiguous(
+    browser_module, tmp_path, monkeypatch
+):
+    root = tmp_path / "User Library"
+    (root / "A").mkdir(parents=True)
+    (root / "B").mkdir(parents=True)
+    (root / "A" / "IMG.amxd").write_bytes(b"payload")
+    (root / "B" / "IMG.amxd").write_bytes(b"payload")
+    monkeypatch.setattr(browser_module, "_bridge_user_library_root", lambda: str(root))
+    absolute_inputs = [
+        r"C:\outside\Preset.adg",
+        r"C:outside\Preset.adg",
+        r"C:Preset.adg",
+        "/tmp/outside/Preset.adg",
+        r"\\server\share\Preset.adg",
+    ]
+
+    path_only = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="user_library_max_for_live",
+        offset=0,
+        limit=10,
+        paths=absolute_inputs,
+    )
+    stale = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="instrument_racks",
+        offset=0,
+        limit=10,
+        paths=["Presets/Instruments/Instrument Rack/Missing.adg"],
+    )
+    ambiguous = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="user_library_max_for_live",
+        offset=0,
+        limit=10,
+        paths=[r"C:\outside\IMG"],
+    )
+    combined = path_only["items"] + stale["items"] + ambiguous["items"]
+
+    assert stale["items"][0]["metadata_status"] == "stale_missing_file"
+    assert ambiguous["items"][0]["metadata_status"] == "ambiguous_file_match"
+    for item in combined:
+        browser_path = item["browser_path"]
+        assert browser_path
+        assert not browser_path.startswith("/")
+        assert not browser_path.startswith("//")
+        assert ":" not in browser_path
+        assert "\\" not in browser_path
+        assert browser_path not in absolute_inputs
+    assert "outside" not in repr(path_only["items"])
+    assert "server" not in repr(path_only["items"])
+
+
+def test_file_backed_metadata_item_keeps_task1_sanitized_browser_path(
+    browser_module, tmp_path, monkeypatch
+):
+    target = tmp_path / "Warm Pad.adg"
+    target.write_bytes(b"payload")
+    monkeypatch.setattr(browser_module, "_bridge_user_library_root", lambda: str(tmp_path))
+    monkeypatch.setattr(
+        browser_module,
+        "_resolve_user_library_file",
+        lambda _root, _browser_path, _category: target,
+    )
+
+    payload = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="instrument_racks",
+        offset=0,
+        limit=10,
+        paths=[r"C:\outside\Warm Pad.adg"],
+    )
+
+    item = payload["items"][0]
+    assert item["metadata_status"] == "file_backed"
+    assert item["browser_path"] == "Warm Pad.adg"
+    assert str(tmp_path) not in repr(item)
+    assert "outside" not in repr(item)
+
+
+def test_first_oversized_metadata_item_does_not_exceed_page_byte_limit(
+    browser_module, tmp_path, monkeypatch
+):
+    root = tmp_path / "User Library"
+    root.mkdir()
+    monkeypatch.setattr(browser_module, "_bridge_user_library_root", lambda: str(root))
+    huge_path = "Presets/Instruments/Instrument Rack/%s.adg" % (
+        "x" * (browser_module.MAX_METADATA_PAGE_BYTES + 1000)
+    )
+
+    payload = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="instrument_racks",
+        offset=0,
+        limit=1,
+        paths=[huge_path],
+    )
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    assert len(encoded.encode("utf-8")) <= browser_module.MAX_METADATA_PAGE_BYTES
+    assert payload["next_offset"] in (None, 1)
+    if payload["items"]:
+        assert len(payload["items"][0]["browser_path"]) < len(huge_path)
+
+
+def test_limit_zero_metadata_page_advances_or_finishes(browser_module, tmp_path, monkeypatch):
+    root = tmp_path / "User Library"
+    root.mkdir()
+    monkeypatch.setattr(browser_module, "_bridge_user_library_root", lambda: str(root))
+
+    payload = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="instrument_racks",
+        offset=0,
+        limit=0,
+        paths=[
+            "Presets/Instruments/Instrument Rack/One.adg",
+            "Presets/Instruments/Instrument Rack/Two.adg",
+        ],
+    )
+
+    assert payload["limit"] == 0
+    assert payload["next_offset"] is None or payload["next_offset"] > payload["offset"]
+
+
+def test_metadata_page_endpoint_returns_json_payload_for_category(
+    browser_module, monkeypatch
+):
+    callbacks = {}
+
+    class _Server:
+        def add_handler(self, address, callback):
+            callbacks[address] = callback
+
+    handler = browser_module.BrowserHandler.__new__(browser_module.BrowserHandler)
+    handler.osc_server = _Server()
+    handler._get_browser = lambda: _BrowserStub(user_library=True)
+    monkeypatch.setattr(
+        browser_module,
+        "_metadata_for_category_items",
+        lambda browser, category, offset=0, limit=25, paths=None: {
+            "category": category,
+            "offset": offset,
+            "limit": limit,
+            "total": 1,
+            "next_offset": None,
+            "items": [
+                {
+                    "browser_path": "Presets/Instruments/Instrument Rack/Bass.adg",
+                    "name": "Bass.adg",
+                    "metadata_status": "path_only",
+                    "file_backed_expected": False,
+                    "file_exists": False,
+                }
+            ],
+        },
+    )
+
+    handler.init_api()
+    reply = callbacks["/live/browser/get/metadata_page"](
+        ("instrument_racks", 0, 10)
+    )
+    payload = json.loads(reply[0])
+
+    assert payload["category"] == "instrument_racks"
+    assert payload["offset"] == 0
+    assert payload["limit"] == 10
+    assert payload["total"] == 1
+    assert payload["next_offset"] is None
+    assert payload["items"][0]["metadata_status"] == "path_only"
