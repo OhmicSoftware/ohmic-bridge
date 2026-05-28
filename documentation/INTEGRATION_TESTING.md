@@ -4,7 +4,7 @@ Pre-release gate for the Ohmic Bridge. Run these tests against a real Ableton Li
 
 ## What they cover
 
-**58 tests across 14 files, covering every OSC endpoint Ohmic's MCP server sends to the Bridge.** Each test creates a known shape in Ableton, performs an operation via the OSC endpoint, reads the result back, and asserts every field matches the expected value byte-for-byte. Any drift in an Ableton API (signature change, return shape change, new required argument) or in the Bridge's wire contract will fail at least one test long before a user's session silently breaks.
+**Focused tests cover every OSC endpoint Ohmic's MCP server sends to the Bridge.** Each test creates a known shape in Ableton, performs an operation via the OSC endpoint, reads the result back, and asserts the endpoint-specific wire fields and resulting Live state. Any drift in an Ableton API (signature change, return shape change, new required argument) or in the Bridge's wire contract will fail at least one test long before a user's session silently breaks.
 
 **Every test owns its state.** Tests that need an empty MIDI track create one via `/live/song/create_midi_track` and delete it on teardown. Tests that need a clip at a specific slot create it via `/live/clip_slot/create_clip`. Tests that need a device to operate on load it first. This means the suite runs green against any Live project — there are no project-state skips.
 
@@ -40,6 +40,9 @@ python -m pytest -m integration
 # One specific integration test file.
 python -m pytest -m integration tests/integration/test_integration_clip_notes.py
 
+# Browser metadata lifecycle and file-type matrix.
+python -m pytest -m integration tests/integration/test_integration_browser_metadata.py -v
+
 # Both unit and integration.
 python -m pytest -m "integration or not integration"
 ```
@@ -60,6 +63,7 @@ tests/integration/
 ├── conftest.py                           # osc fixture + _quantization_none + wait_one_tick
 ├── test_integration_arrangement.py       # arrangement_clips bucket
 ├── test_integration_browser.py           # browser bucket
+├── test_integration_browser_metadata.py  # file-backed browser metadata lifecycle
 ├── test_integration_clip_notes.py        # clip_notes_rw bucket (session)
 ├── test_integration_clip_properties.py   # clip name/color/length/looping
 ├── test_integration_clip_slot.py         # clip_slot has_clip/fire/stop
@@ -71,8 +75,9 @@ tests/integration/
 ├── test_integration_session_info.py      # JSON-returning aggregate handlers
 ├── test_integration_song_scale.py        # song_scale_properties bucket
 ├── test_integration_song_transport.py    # transport, tempo, num_scenes, track_names, create tracks/scenes
-├── test_integration_track.py             # track name/mute/devices/delete_device
-└── test_integration_view.py              # view selected_clip roundtrip
+├── test_integration_track.py             # track name/mute/devices/delete_device/move_device
+├── test_integration_view.py              # view selected_clip roundtrip
+└── browser_metadata_fixtures.py          # User Library fixture discovery/copy/cleanup helpers
 ```
 
 ## Transport-state caveat
@@ -80,6 +85,16 @@ tests/integration/
 Ableton's transport state (`/live/song/get/is_playing`) does not flip immediately on `start_playing` / `stop_playing` when `clip_trigger_quantization` is anything other than `"none"`. The session default is usually `"1 bar"` which means a transport change waits up to one bar to take effect, causing transport tests to flake.
 
 Tests that depend on transport state use the shared `_quantization_none` fixture in `conftest.py`: set quantization to `"none"` at test start (verified via read-back), run the test, restore the original value on teardown (also verified). If you add a new test that exercises transport state, depend on this fixture by argument name.
+
+## Browser metadata fixture folder
+
+`tests/integration/test_integration_browser_metadata.py` owns exactly one temporary folder in the Ableton User Library: `_OhmicMetadataE2E`. The helper creates `_OhmicMetadataE2E/.ohmic_metadata_e2e.json` before copying fixtures. Cleanup refuses to delete `_OhmicMetadataE2E` unless that marker file is present, so a manually-created or suspicious folder with the same name fails loudly instead of being removed.
+
+The helper removes a stale marked `_OhmicMetadataE2E` folder at test start, copies fresh source files into category-shaped User Library subfolders, and registers pytest finalizers so filesystem cleanup still runs after failed tests. After explicit cleanup, the metadata tests poll `/live/browser/get/metadata_page` until the owned browser paths are no longer active; `stale_missing_file` entries are treated as stale cache diagnostics, not active files.
+
+Source discovery scans only the Ableton User Library root (`E:\Ableton\User Library` on Adam's Windows PC, `/Users/awilki01/Music/Ableton/User Library` on Adam's macOS laptop), prefers small files, and excludes `Remote Scripts` plus `_OhmicMetadataE2E`. The tests never create backups or sibling copies under `Remote Scripts`; do not add Remote Scripts backup behavior to this fixture.
+
+Do not parallelize these tests. In addition to the suite-wide Ableton process constraint, the helper skips clearly when `PYTEST_XDIST_WORKER` is present and also acquires `_OhmicMetadataE2E.lock` with exclusive creation before touching `_OhmicMetadataE2E`.
 
 ## When a test fails
 

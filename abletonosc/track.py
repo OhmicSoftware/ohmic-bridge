@@ -18,6 +18,11 @@ class TrackHandler(AbletonOSCHandler):
                     track_indices = [int(params[0])]
 
                 for track_index in track_indices:
+                    if track_index < 0 or track_index >= len(self.song.tracks):
+                        return (
+                            track_index,
+                            "error: track_index %s is out of range" % track_index,
+                        )
                     track = self.song.tracks[track_index]
                     if include_track_id:
                         rv = func(track, *args, tuple([track_index] + params[1:]))
@@ -110,6 +115,56 @@ class TrackHandler(AbletonOSCHandler):
 
         self.osc_server.add_handler("/live/track/delete_device", create_track_callback(track_delete_device))
 
+        @guarded_lom("track_move_device")
+        def track_move_device(track, params: Tuple[Any] = ()):
+            device_index, target_track_index, target_position = params
+            device_index = int(device_index)
+            target_track_index = int(target_track_index)
+            target_position = int(target_position)
+            if not hasattr(self.song, "move_device"):
+                return ("error: song.move_device not available",)
+            if device_index < 0 or device_index >= len(track.devices):
+                return (
+                    "error: device_index %s is out of range" % device_index,
+                )
+            tracks = self.song.tracks
+            if target_track_index < 0 or target_track_index >= len(tracks):
+                return (
+                    "error: target_track_index %s is out of range"
+                    % target_track_index,
+                )
+
+            device = track.devices[device_index]
+            target_track = tracks[target_track_index]
+            if target_position < 0 or target_position > len(target_track.devices):
+                return (
+                    "error: target_position %s is out of range"
+                    % target_position,
+                )
+            valid_position = -1
+            if hasattr(self.song, "find_device_position"):
+                found = self.song.find_device_position(
+                    device, target_track, target_position
+                )
+                if found is not None:
+                    valid_position = int(found)
+            actual_position = self.song.move_device(
+                device, target_track, target_position
+            )
+            if actual_position is None:
+                actual_position = -1
+            return (
+                device_index,
+                target_track_index,
+                target_position,
+                valid_position,
+                int(actual_position),
+                "ok",
+                *(device.name for device in target_track.devices),
+            )
+
+        self.osc_server.add_handler("/live/track/move_device", create_track_callback(track_move_device))
+
         def track_delete_clip(track, params: Tuple[Any]):
             clip_index, = params
             track.clip_slots[clip_index].delete_clip()
@@ -137,6 +192,22 @@ class TrackHandler(AbletonOSCHandler):
         def track_get_arrangement_clip_start_times(track, _):
             return tuple(clip.start_time for clip in track.arrangement_clips)
 
+        @guarded_lom("track_get_arrangement_clip_end_times")
+        def track_get_arrangement_clip_end_times(track, _):
+            return tuple(clip.end_time for clip in track.arrangement_clips)
+
+        @guarded_lom("track_get_arrangement_clip_looping")
+        def track_get_arrangement_clip_looping(track, _):
+            return tuple(clip.looping for clip in track.arrangement_clips)
+
+        @guarded_lom("track_get_arrangement_clip_loop_starts")
+        def track_get_arrangement_clip_loop_starts(track, _):
+            return tuple(clip.loop_start for clip in track.arrangement_clips)
+
+        @guarded_lom("track_get_arrangement_clip_loop_ends")
+        def track_get_arrangement_clip_loop_ends(track, _):
+            return tuple(clip.loop_end for clip in track.arrangement_clips)
+
         @guarded_lom("track_get_arrangement_clip_colors")
         def track_get_arrangement_clip_colors(track, _):
             return tuple(
@@ -160,6 +231,10 @@ class TrackHandler(AbletonOSCHandler):
         self.osc_server.add_handler("/live/track/get/arrangement_clips/name", create_track_callback(track_get_arrangement_clip_names))
         self.osc_server.add_handler("/live/track/get/arrangement_clips/length", create_track_callback(track_get_arrangement_clip_lengths))
         self.osc_server.add_handler("/live/track/get/arrangement_clips/start_time", create_track_callback(track_get_arrangement_clip_start_times))
+        self.osc_server.add_handler("/live/track/get/arrangement_clips/end_time", create_track_callback(track_get_arrangement_clip_end_times))
+        self.osc_server.add_handler("/live/track/get/arrangement_clips/looping", create_track_callback(track_get_arrangement_clip_looping))
+        self.osc_server.add_handler("/live/track/get/arrangement_clips/loop_start", create_track_callback(track_get_arrangement_clip_loop_starts))
+        self.osc_server.add_handler("/live/track/get/arrangement_clips/loop_end", create_track_callback(track_get_arrangement_clip_loop_ends))
         self.osc_server.add_handler("/live/track/get/arrangement_clips/color", create_track_callback(track_get_arrangement_clip_colors))
         self.osc_server.add_handler("/live/track/get/arrangement_clips/color_index", create_track_callback(track_get_arrangement_clip_color_indices))
 

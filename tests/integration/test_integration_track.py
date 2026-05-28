@@ -284,6 +284,101 @@ def _device_names_on_track(osc, track_id):
     return [str(n) for n in reply[1:]]
 
 
+def _find_browser_match(osc, category, query):
+    reply = osc.query("/live/browser/search", [category, query])
+    if len(reply) < 3:
+        return None
+    matches = [str(match) for match in reply[2:] if str(match) != "no matches"]
+    if not matches:
+        return None
+    needle = query.lower()
+    for match in matches:
+        if needle in match.lower():
+            return match
+    return matches[0]
+
+
+def _clear_track_devices(osc, track_id):
+    while True:
+        names = _device_names_on_track(osc, track_id)
+        if not names:
+            return
+        ack = osc.query("/live/track/delete_device", [track_id, 0])
+        assert ack == (track_id, 0, "ok"), (
+            "delete_device during cleanup returned %r" % (ack,)
+        )
+        wait_one_tick()
+
+
+def test_track_move_device_reorders_loaded_plugins_without_reload(osc):
+    """Move an existing plugin instance and verify order by read-back."""
+    pro_q = _find_browser_match(osc, "plugins", "Pro-Q 4")
+    span = _find_browser_match(osc, "plugins", "SPAN")
+    if not pro_q or not span:
+        pytest.skip("Pro-Q 4 and SPAN plugins are required for this move test")
+
+    track_idx = create_temp_midi_track(osc)
+    try:
+        _clear_track_devices(osc, track_idx)
+        _load_browser_device(osc, track_idx, "plugins", pro_q)
+        loaded = _load_browser_device(osc, track_idx, "plugins", span)
+
+        pro_q_index = _index_matching(loaded, "Pro-Q")
+        span_index = _index_matching(loaded, "SPAN")
+        assert pro_q_index < span_index, (
+            "expected initial Pro-Q before SPAN order, got %r" % (loaded,)
+        )
+
+        reply = osc.query(
+            "/live/track/move_device",
+            [track_idx, span_index, track_idx, pro_q_index],
+        )
+        assert len(reply) >= 7, "move_device reply was incomplete: %r" % (reply,)
+        assert reply[0] == track_idx
+        assert reply[1] == span_index
+        assert reply[2] == track_idx
+        assert reply[3] == pro_q_index
+        assert reply[6] == "ok", "move_device did not return ok: %r" % (reply,)
+        wait_one_tick()
+
+        moved = _device_names_on_track(osc, track_idx)
+        moved_span_index = _index_matching(moved, "SPAN")
+        moved_pro_q_index = _index_matching(moved, "Pro-Q")
+        assert moved_span_index < moved_pro_q_index, (
+            "SPAN was not moved before Pro-Q: before=%r, after=%r"
+            % (loaded, moved)
+        )
+        assert len(moved) == len(loaded), (
+            "move_device changed device count: before=%r, after=%r"
+            % (loaded, moved)
+        )
+        assert int(reply[5]) == moved_span_index, (
+            "move_device actual index %r did not match read-back %r"
+            % (reply[5], moved)
+        )
+    finally:
+        delete_track_by_index(osc, track_idx)
+        wait_one_tick()
+
+
+def _load_browser_device(osc, track_id, category, item):
+    reply = osc.query("/live/browser/load", [track_id, category, item])
+    assert len(reply) >= 1 and reply[-1] == "ok", (
+        "browser/load did not return ok for %r in %s - got %r"
+        % (item, category, reply)
+    )
+    wait_one_tick()
+    return _device_names_on_track(osc, track_id)
+
+
+def _index_matching(names, needle):
+    needle = needle.lower()
+    for index, name in enumerate(names):
+        if needle in name.lower():
+            return index
+    raise AssertionError("could not find %r in device names %r" % (needle, names))
+
+
 def test_track_delete_device_then_restore(osc):
     """Create a temporary MIDI track at index -1, load a stock
     instrument onto it via /live/browser/load, verify the device is

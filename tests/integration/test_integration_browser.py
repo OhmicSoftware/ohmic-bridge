@@ -34,8 +34,6 @@ RACK_CATEGORY_PATH_PARTS = {
 }
 
 LEGACY_BROWSER_CATEGORIES = {
-    "audio_effects",
-    "midi_effects",
     "user_library",
     "presets",
 }
@@ -74,6 +72,8 @@ def test_browser_capabilities_returnable(osc):
     reply = osc.query("/live/browser/get/capabilities", [])
     allowed = {
         "instruments",
+        "audio_effects",
+        "midi_effects",
         "plugins",
         "instrument_racks",
         "drum_racks",

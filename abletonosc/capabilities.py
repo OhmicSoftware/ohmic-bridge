@@ -40,6 +40,9 @@ CAPABILITY_GROUPS = {
     "arrangement_deltas": [
         lambda: hasattr(Live.Track.Track, "arrangement_clips"),
     ],
+    "arrangement_snapshot_chunks": [
+        lambda: hasattr(Live.Track.Track, "arrangement_clips"),
+    ],
     "clip_slot_duplicate": [
         lambda: hasattr(Live.ClipSlot.ClipSlot, "duplicate_clip_to"),
     ],
@@ -63,6 +66,9 @@ CAPABILITY_GROUPS = {
     ],
     "song_beat_listener": [
         lambda: hasattr(Live.Song.Song, "add_current_song_time_listener"),
+    ],
+    "song_device_move": [
+        lambda: hasattr(Live.Song.Song, "move_device"),
     ],
     "browser": [
         lambda: hasattr(Live.Application.get_application(), "browser"),

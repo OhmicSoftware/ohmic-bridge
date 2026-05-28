@@ -27,6 +27,7 @@ EXPECTED_CAPABILITY_BUCKETS = {
     "clip_automation_envelopes",
     "arrangement_clips",
     "arrangement_deltas",
+    "arrangement_snapshot_chunks",
     "clip_slot_duplicate",
     "song_scale_properties",
     "scene_tempo",
@@ -34,6 +35,7 @@ EXPECTED_CAPABILITY_BUCKETS = {
     "device_parameter_value_strings",
     "song_cue_points",
     "song_beat_listener",
+    "song_device_move",
     "browser",
 }
 
@@ -61,8 +63,8 @@ def test_bridge_version_reply(osc):
     assert isinstance(major, int) and isinstance(minor, int) and isinstance(patch, int), (
         "every version component must be an int — got %r" % (reply,)
     )
-    assert (major, minor, patch) >= (0, 4, 0), (
-        "bridge version must be >= (0, 4, 0) — got %r" % (reply,)
+    assert (major, minor, patch) >= (0, 5, 0), (
+        "bridge version must be >= (0, 5, 0) — got %r" % (reply,)
     )
 
 

@@ -1,4 +1,4 @@
-"""Unit tests for Bridge 0.4.0 destructive-operation acknowledgements."""
+"""Unit tests for Bridge 0.5.0 destructive-operation acknowledgements."""
 
 import importlib
 from pathlib import Path
@@ -77,9 +77,9 @@ def _fresh_track_module():
     return importlib.reload(module)
 
 
-def test_bridge_version_is_0_4_0():
+def test_bridge_version_is_0_5_0():
     manager = _fresh_manager_module()
-    assert manager.BRIDGE_VERSION == (0, 4, 0)
+    assert manager.BRIDGE_VERSION == (0, 5, 0)
 
 
 def test_ableton_stub_repairs_existing_incomplete_control_surface_module():
@@ -290,3 +290,284 @@ def test_track_delete_device_handler_returns_ok_ack():
     reply = callbacks["/live/track/delete_device"]((0, 2))
     assert reply == (0, 2, "ok")
     assert live_track.deleted == [2]
+
+
+def test_track_delete_device_handler_rejects_negative_track_index():
+    track_module = _fresh_track_module()
+    handler = track_module.TrackHandler.__new__(track_module.TrackHandler)
+    callbacks = {}
+
+    class _Server:
+        def add_handler(self, address, callback):
+            callbacks[address] = callback
+
+    class _Track:
+        def __init__(self):
+            self.deleted = []
+
+        def delete_device(self, device_index):
+            self.deleted.append(device_index)
+
+    live_track = _Track()
+    handler.osc_server = _Server()
+    handler.song = types.SimpleNamespace(tracks=[live_track])
+    handler.init_api()
+
+    reply = callbacks["/live/track/delete_device"]((-1, 0))
+
+    assert reply == (-1, "error: track_index -1 is out of range")
+    assert live_track.deleted == []
+
+
+def test_track_move_device_handler_uses_song_move_device():
+    track_module = _fresh_track_module()
+    handler = track_module.TrackHandler.__new__(track_module.TrackHandler)
+    callbacks = {}
+
+    class _Server:
+        def add_handler(self, address, callback):
+            callbacks[address] = callback
+
+    class _Device:
+        def __init__(self, name):
+            self.name = name
+
+    class _Track:
+        def __init__(self, names):
+            self.devices = [_Device(name) for name in names]
+
+    class _Song:
+        def __init__(self):
+            self.tracks = [_Track(["Pigments", "Pro-Q 4", "SPAN"])]
+            self.move_args = None
+            self.find_args = None
+
+        def find_device_position(self, device, target, target_position):
+            self.find_args = (device, target, target_position)
+            return int(target_position)
+
+        def move_device(self, device, target, target_position):
+            self.move_args = (device, target, target_position)
+            source = self.tracks[0].devices
+            source.remove(device)
+            target.devices.insert(int(target_position), device)
+            return int(target_position)
+
+    song = _Song()
+    handler.osc_server = _Server()
+    handler.song = song
+    handler.init_api()
+
+    reply = callbacks["/live/track/move_device"]((0, 2, 0, 1))
+
+    assert reply == (
+        0, 2, 0, 1, 1, 1, "ok", "Pigments", "SPAN", "Pro-Q 4",
+    )
+    assert song.move_args == (
+        song.tracks[0].devices[1], song.tracks[0], 1,
+    )
+    assert [device.name for device in song.tracks[0].devices] == [
+        "Pigments", "SPAN", "Pro-Q 4",
+    ]
+
+
+def test_track_move_device_handler_rejects_negative_track_index():
+    track_module = _fresh_track_module()
+    handler = track_module.TrackHandler.__new__(track_module.TrackHandler)
+    callbacks = {}
+
+    class _Server:
+        def add_handler(self, address, callback):
+            callbacks[address] = callback
+
+    class _Device:
+        name = "SPAN"
+
+    class _Track:
+        devices = [_Device()]
+
+    class _Song:
+        def __init__(self):
+            self.tracks = [_Track()]
+            self.move_calls = []
+
+        def move_device(self, device, target, target_position):
+            self.move_calls.append((device, target, target_position))
+
+    song = _Song()
+    handler.osc_server = _Server()
+    handler.song = song
+    handler.init_api()
+
+    reply = callbacks["/live/track/move_device"]((-1, 0, 0, 0))
+
+    assert reply == (-1, "error: track_index -1 is out of range")
+    assert song.move_calls == []
+
+
+def test_track_move_device_handler_rejects_negative_device_index():
+    track_module = _fresh_track_module()
+    handler = track_module.TrackHandler.__new__(track_module.TrackHandler)
+    callbacks = {}
+
+    class _Server:
+        def add_handler(self, address, callback):
+            callbacks[address] = callback
+
+    class _Device:
+        name = "SPAN"
+
+    class _Track:
+        devices = [_Device()]
+
+    class _Song:
+        def __init__(self):
+            self.tracks = [_Track()]
+            self.move_calls = []
+
+        def move_device(self, device, target, target_position):
+            self.move_calls.append((device, target, target_position))
+
+    song = _Song()
+    handler.osc_server = _Server()
+    handler.song = song
+    handler.init_api()
+
+    reply = callbacks["/live/track/move_device"]((0, -1, 0, 0))
+
+    assert reply == (0, "error: device_index -1 is out of range")
+    assert song.move_calls == []
+
+
+def test_track_move_device_handler_rejects_negative_target_track_index():
+    track_module = _fresh_track_module()
+    handler = track_module.TrackHandler.__new__(track_module.TrackHandler)
+    callbacks = {}
+
+    class _Server:
+        def add_handler(self, address, callback):
+            callbacks[address] = callback
+
+    class _Device:
+        name = "SPAN"
+
+    class _Track:
+        devices = [_Device()]
+
+    class _Song:
+        def __init__(self):
+            self.tracks = [_Track()]
+            self.move_calls = []
+
+        def move_device(self, device, target, target_position):
+            self.move_calls.append((device, target, target_position))
+
+    song = _Song()
+    handler.osc_server = _Server()
+    handler.song = song
+    handler.init_api()
+
+    reply = callbacks["/live/track/move_device"]((0, 0, -1, 0))
+
+    assert reply == (0, "error: target_track_index -1 is out of range")
+    assert song.move_calls == []
+
+
+def test_track_move_device_handler_rejects_negative_target_position():
+    track_module = _fresh_track_module()
+    handler = track_module.TrackHandler.__new__(track_module.TrackHandler)
+    callbacks = {}
+
+    class _Server:
+        def add_handler(self, address, callback):
+            callbacks[address] = callback
+
+    class _Device:
+        name = "SPAN"
+
+    class _Track:
+        devices = [_Device()]
+
+    class _Song:
+        def __init__(self):
+            self.tracks = [_Track()]
+            self.move_calls = []
+
+        def move_device(self, device, target, target_position):
+            self.move_calls.append((device, target, target_position))
+
+    song = _Song()
+    handler.osc_server = _Server()
+    handler.song = song
+    handler.init_api()
+
+    reply = callbacks["/live/track/move_device"]((0, 0, 0, -1))
+
+    assert reply == (0, "error: target_position -1 is out of range")
+    assert song.move_calls == []
+
+
+def test_track_move_device_handler_rejects_out_of_range_indexes():
+    track_module = _fresh_track_module()
+    handler = track_module.TrackHandler.__new__(track_module.TrackHandler)
+    callbacks = {}
+
+    class _Server:
+        def add_handler(self, address, callback):
+            callbacks[address] = callback
+
+    class _Device:
+        name = "SPAN"
+
+    class _Track:
+        devices = [_Device()]
+
+    class _Song:
+        def __init__(self):
+            self.tracks = [_Track()]
+            self.move_calls = []
+
+        def move_device(self, device, target, target_position):
+            self.move_calls.append((device, target, target_position))
+
+    song = _Song()
+    handler.osc_server = _Server()
+    handler.song = song
+    handler.init_api()
+
+    move = callbacks["/live/track/move_device"]
+
+    assert move((0, 99, 0, 0)) == (
+        0, "error: device_index 99 is out of range",
+    )
+    assert move((0, 0, 99, 0)) == (
+        0, "error: target_track_index 99 is out of range",
+    )
+    assert move((0, 0, 0, 2)) == (
+        0, "error: target_position 2 is out of range",
+    )
+    assert song.move_calls == []
+
+
+def test_track_move_device_handler_reports_missing_lom_api():
+    track_module = _fresh_track_module()
+    handler = track_module.TrackHandler.__new__(track_module.TrackHandler)
+    callbacks = {}
+
+    class _Server:
+        def add_handler(self, address, callback):
+            callbacks[address] = callback
+
+    class _Device:
+        name = "SPAN"
+
+    class _Track:
+        devices = [_Device()]
+
+    handler.osc_server = _Server()
+    handler.song = types.SimpleNamespace(tracks=[_Track()])
+    handler.init_api()
+
+    reply = callbacks["/live/track/move_device"]((0, 0, 0, 0))
+
+    assert reply == (0, "error: song.move_device not available")
