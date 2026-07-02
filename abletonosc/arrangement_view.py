@@ -129,6 +129,7 @@ def _clip_row(clip, clip_index: int, *, is_midi_track: bool) -> dict:
         "looping": bool(getattr(clip, "looping", False)),
         "loop_start": _optional_float(clip, "loop_start"),
         "loop_end": _optional_float(clip, "loop_end"),
+        "start_marker": _optional_float(clip, "start_marker"),
         "color": _optional_color_hex(clip),
         "color_index": _optional_int(clip, "color_index"),
         "notes_signature": (

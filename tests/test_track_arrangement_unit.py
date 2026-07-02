@@ -45,6 +45,7 @@ class _Clip:
         looping=None,
         loop_start=None,
         loop_end=None,
+        start_marker=None,
     ):
         self.color = color
         self.color_index = color_index
@@ -52,6 +53,7 @@ class _Clip:
         self.looping = looping
         self.loop_start = loop_start
         self.loop_end = loop_end
+        self.start_marker = start_marker
 
 
 def _install_live_stubs():
@@ -130,6 +132,7 @@ def test_track_handler_exposes_arrangement_clip_loop_fallback_metadata():
                     looping=True,
                     loop_start=4.0,
                     loop_end=12.0,
+                    start_marker=2.0,
                 ),
             ])
         ])
@@ -150,5 +153,8 @@ def test_track_handler_exposes_arrangement_clip_loop_fallback_metadata():
         assert manager.osc_server.handlers[
             "/live/track/get/arrangement_clips/loop_end"
         ]((0,)) == (0, 12.0)
+        assert manager.osc_server.handlers[
+            "/live/track/get/arrangement_clips/start_marker"
+        ]((0,)) == (0, 2.0)
     finally:
         _restore_modules(originals)

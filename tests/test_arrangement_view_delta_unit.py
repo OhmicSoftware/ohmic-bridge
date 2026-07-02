@@ -37,6 +37,7 @@ class _Clip:
         looping=False,
         loop_start=None,
         loop_end=None,
+        start_marker=None,
         notes=(),
         notes_error=None,
         notes_error_after_calls=None,
@@ -50,6 +51,7 @@ class _Clip:
         self.looping = looping
         self.loop_start = 0.0 if loop_start is None else loop_start
         self.loop_end = length if loop_end is None else loop_end
+        self.start_marker = self.loop_start if start_marker is None else start_marker
         self.color = color
         self.color_index = color_index
         self._notes = list(notes)
@@ -240,6 +242,7 @@ def test_build_arrangement_snapshot_includes_live_ptr_clip_ids():
                 "looping": False,
                 "loop_start": 0.0,
                 "loop_end": 8.0,
+                "start_marker": 0.0,
                 "color": "#445566",
                 "color_index": 12,
                 "notes_signature": "0:0",
@@ -358,6 +361,7 @@ def test_build_arrangement_snapshot_includes_loop_metadata():
                     looping=True,
                     loop_start=0.0,
                     loop_end=4.0,
+                    start_marker=1.0,
                 )
             ],
         )
@@ -372,6 +376,7 @@ def test_build_arrangement_snapshot_includes_loop_metadata():
     assert clip["looping"] is True
     assert clip["loop_start"] == 0.0
     assert clip["loop_end"] == 4.0
+    assert clip["start_marker"] == 1.0
 
 
 def test_build_arrangement_snapshot_includes_group_parent_indices():
@@ -572,6 +577,7 @@ def test_delta_cache_snapshot_manifest_caches_matching_chunks():
                 "looping": False,
                 "loop_start": 0.0,
                 "loop_end": 8.0,
+                "start_marker": 0.0,
                 "color": "#445566",
                 "color_index": 12,
                 "notes_signature": "0:0",
@@ -588,6 +594,7 @@ def test_delta_cache_snapshot_manifest_caches_matching_chunks():
                 "looping": False,
                 "loop_start": 0.0,
                 "loop_end": 4.0,
+                "start_marker": 0.0,
                 "color": "#445566",
                 "color_index": 12,
                 "notes_signature": "0:0",
@@ -781,6 +788,7 @@ def test_delta_cache_replaces_only_changed_track_clips():
                         "looping": False,
                         "loop_start": 0.0,
                         "loop_end": 4.0,
+                        "start_marker": 0.0,
                         "color": "#778899",
                         "color_index": 18,
                         "notes_signature": "0:0",
@@ -819,6 +827,7 @@ def test_delta_cache_replaces_track_clips_when_clip_color_changes():
                         "looping": False,
                         "loop_start": 0.0,
                         "loop_end": 8.0,
+                        "start_marker": 0.0,
                         "color": "#99aabb",
                         "color_index": 21,
                         "notes_signature": "0:0",
