@@ -478,3 +478,220 @@ def test_remove_arrangement_clip_notes(osc):
             "teardown left track at %d clips (expected baseline %d)"
             % (final_count, baseline_count)
         )
+
+
+def test_arrangement_clip_start_marker_readback_via_bulk_endpoint_and_snapshot(osc):
+    """Verify the new /live/track/get/arrangement_clips/start_marker bulk
+    endpoint and the arrangement_snapshot's per-clip "start_marker" key
+    (abletonosc/arrangement_view.py's ``_clip_row``) both surface the
+    LOM's ``Clip.start_marker`` for a freshly-created, untrimmed
+    arrangement clip. Ohmic's Arrangement View consumes these to
+    render trimmed clips correctly; this is the real-Ableton evidence
+    that both surfaces report 0.0 for a clip that hasn't been trimmed.
+
+    Robust against pre-existing arrangement clips on TRACK_ID: the new
+    clip is placed at a ``safe_start`` past any existing content and
+    located by start_time, not by a hardcoded index.
+    """
+    baseline_count, latest_end = _arrangement_clips_baseline(osc)
+    safe_start = latest_end + 8.0
+    osc.send_message("/live/arrangement_clip/create", [TRACK_ID, safe_start, 4.0])
+    wait_one_tick()
+    clip_index = _find_clip_index_by_start(osc, safe_start)
+
+    try:
+        # Bulk endpoint wire: (track, marker_0, marker_1, ...) — same
+        # per-clip index order as /live/track/get/arrangement_clips/
+        # start_time, since both iterate track.arrangement_clips in
+        # LOM order (see track_get_arrangement_clip_start_markers in
+        # abletonosc/track.py).
+        markers_reply = osc.query(
+            "/live/track/get/arrangement_clips/start_marker", [TRACK_ID])
+        markers = [float(m) for m in list(markers_reply)[1:]]
+        assert clip_index < len(markers), (
+            "bulk start_marker listing shorter than expected clip_index "
+            "%d: %r" % (clip_index, markers_reply)
+        )
+        assert markers[clip_index] == pytest.approx(0.0), (
+            "expected a freshly-created, untrimmed clip's start_marker "
+            "to be 0.0 — got %r (full listing: %r)"
+            % (markers[clip_index], markers)
+        )
+
+        # Snapshot: clip row must carry "start_marker" alongside the
+        # pre-existing "loop_start" key.
+        snapshot_reply = osc.query("/live/song/get/arrangement_snapshot", [])
+        snapshot = json.loads(snapshot_reply[-1])
+        assert snapshot["status"] == "ok"
+        clip_row = snapshot["clips"][str(TRACK_ID)][clip_index]
+        assert "start_marker" in clip_row, (
+            "arrangement_snapshot clip row is missing the 'start_marker' "
+            "key: %r" % (clip_row,)
+        )
+        assert clip_row["start_marker"] == pytest.approx(0.0), (
+            "snapshot start_marker mismatch: %r" % (clip_row,)
+        )
+        assert "loop_start" in clip_row
+    finally:
+        osc.send_message("/live/arrangement_clip/delete", [TRACK_ID, clip_index])
+        wait_one_tick()
+        final_count = _arrangement_clips_baseline(osc)[0]
+        assert final_count == baseline_count, (
+            "teardown left track at %d clips (expected baseline %d)"
+            % (final_count, baseline_count)
+        )
+
+
+def test_unlooped_session_clip_mirrors_start_marker_into_loop_start(osc):
+    """Prove the Live Object Model rule that Ohmic's Arrangement View
+    fallback depends on: for an UNLOOPED clip, ``start_marker`` and
+    ``loop_start`` are always numerically equal, so reading
+    ``loop_start`` is a safe substitute when an older Bridge build's
+    arrangement snapshot omits the newer ``start_marker`` key (see
+    arrangement_view.py's ``_clip_row``). Also proves note times stay
+    content-anchored — moving the trim point does NOT rebase the
+    underlying note start times.
+
+    A session clip is used, not an arrangement clip, because the
+    Bridge only wires up start_marker/looping/loop_start *setters*
+    through the generic session-clip property handlers in clip.py's
+    ``properties_rw`` list — arrangement clips only get a name setter
+    (see the arrangement-clip endpoints further up in clip.py). The
+    properties under test are defined on Live's Clip class itself, so
+    their behavior is identical for a session clip and an arrangement
+    clip; a session clip is a faithful proxy for the arrangement-clip
+    rendering behavior Ohmic relies on.
+
+    REAL-ABLETON FINDING (confirmed against Live 12.3.5 via two
+    standalone diagnostic runs; abletonosc.log shows no exception
+    around either set — this is genuine LOM behavior, not a Bridge
+    bug or a masked error): ``clip.start_marker``'s setter is only
+    *effective* while ``clip.looping == True``. Diagnostic evidence:
+
+      * looping=True,  set start_marker=3.0 -> reads back 3.0
+        (loop_start stays untouched at 0.0: independent while looped).
+      * set looping=False -> loop_start snaps to 3.0 (locks to
+        whatever start_marker held at the moment of unlooping).
+      * still unlooped, set start_marker=1.0 -> reads back unchanged
+        (3.0): the setter is a no-op once unlooped.
+      * still unlooped, set loop_start=4.0 -> reads back 4.0, AND
+        start_marker follows to 4.0 too.
+
+    In other words: while looping, start_marker is authoritative and
+    independent of loop_start; once unlooped, loop_start becomes the
+    only setter that moves the trim point, and start_marker becomes a
+    locked mirror of it. Either way, once unlooped the two values are
+    always equal — exactly the invariant Ohmic's loop_start fallback
+    needs. This test drives the clip through both setters (as a real
+    Bridge caller would have to) rather than asserting on the inert
+    start_marker-while-unlooped no-op, which would exercise nothing.
+    """
+    slot_index = 0
+    clip_length = 8.0
+    osc.send_message(
+        "/live/clip_slot/create_clip", [TRACK_ID, slot_index, clip_length])
+    wait_one_tick()
+    has_clip = osc.query(
+        "/live/clip_slot/get/has_clip", [TRACK_ID, slot_index])
+    assert len(has_clip) >= 3 and bool(has_clip[2]) is True, (
+        "failed to create session clip at (%d, %d): %r"
+        % (TRACK_ID, slot_index, has_clip)
+    )
+
+    try:
+        # Two notes at content-relative times 0.5 and 5.0, inside the
+        # 8-beat clip and straddling the trim points used below.
+        osc.send_message(
+            "/live/clip/add/notes",
+            [TRACK_ID, slot_index, 60, 0.5, 1.0, 100, 0, 1.0])
+        wait_one_tick()
+        osc.send_message(
+            "/live/clip/add/notes",
+            [TRACK_ID, slot_index, 62, 5.0, 1.0, 110, 0, 1.0])
+        wait_one_tick()
+
+        def read_notes():
+            # /live/clip/get/notes shares the (track, clip_index,
+            # pitch, start, dur, vel, mute, prob, ...) wire shape with
+            # /live/arrangement_clip/get/notes, so the existing
+            # decoder applies unchanged.
+            return _decode_arrangement_notes(
+                osc.query("/live/clip/get/notes", [TRACK_ID, slot_index]))
+
+        notes_before = read_notes()
+        assert len(notes_before) == 2, (
+            "expected 2 notes before any trim move: %r" % (notes_before,)
+        )
+
+        # Step 1: while still looping (the default), start_marker's
+        # setter IS effective.
+        osc.send_message(
+            "/live/clip/set/start_marker", [TRACK_ID, slot_index, 4.0])
+        wait_one_tick()
+        marker_while_looping = osc.query(
+            "/live/clip/get/start_marker", [TRACK_ID, slot_index])
+        assert float(marker_while_looping[2]) == pytest.approx(4.0), (
+            "start_marker did not land while looping=True — got %r"
+            % (marker_while_looping,)
+        )
+
+        # Step 2: flip looping False. Live locks loop_start to the
+        # current start_marker value — the mirror under test.
+        osc.send_message(
+            "/live/clip/set/looping", [TRACK_ID, slot_index, False])
+        wait_one_tick()
+        looping_reply = osc.query(
+            "/live/clip/get/looping", [TRACK_ID, slot_index])
+        assert bool(looping_reply[2]) is False, (
+            "looping=False did not land — got %r" % (looping_reply,)
+        )
+        loop_start_after_unloop = osc.query(
+            "/live/clip/get/loop_start", [TRACK_ID, slot_index])
+        assert float(loop_start_after_unloop[2]) == pytest.approx(4.0), (
+            "expected unlooping to lock loop_start to start_marker=4.0 "
+            "— got %r" % (loop_start_after_unloop,)
+        )
+
+        # Step 3: the setter that moves the trim point once unlooped
+        # is loop_start — and it drags start_marker along with it.
+        # This is the actual mirror path Ohmic's fallback depends on.
+        osc.send_message(
+            "/live/clip/set/loop_start", [TRACK_ID, slot_index, 2.0])
+        wait_one_tick()
+        loop_start_final = osc.query(
+            "/live/clip/get/loop_start", [TRACK_ID, slot_index])
+        marker_final = osc.query(
+            "/live/clip/get/start_marker", [TRACK_ID, slot_index])
+        assert float(loop_start_final[2]) == pytest.approx(2.0), (
+            "loop_start did not land — got %r" % (loop_start_final,)
+        )
+        assert float(marker_final[2]) == pytest.approx(2.0), (
+            "expected start_marker to mirror loop_start=2.0 once "
+            "unlooped — got %r" % (marker_final,)
+        )
+
+        # Content-anchoring: none of the trim moves above rebased the
+        # underlying note start times.
+        notes_after = read_notes()
+        assert len(notes_after) == 2, (
+            "note count changed after the trim moves: %r" % (notes_after,)
+        )
+        by_pitch = {n["pitch"]: n for n in notes_after}
+        assert 60 in by_pitch and 62 in by_pitch
+        assert by_pitch[60]["start"] == pytest.approx(0.5), (
+            "note at pitch 60 should stay at content time 0.5 — got %r"
+            % (notes_after,)
+        )
+        assert by_pitch[62]["start"] == pytest.approx(5.0), (
+            "note at pitch 62 should stay at content time 5.0 — got %r"
+            % (notes_after,)
+        )
+    finally:
+        osc.send_message(
+            "/live/clip_slot/delete_clip", [TRACK_ID, slot_index])
+        wait_one_tick()
+        has_clip_after = osc.query(
+            "/live/clip_slot/get/has_clip", [TRACK_ID, slot_index])
+        assert bool(has_clip_after[2]) is False, (
+            "teardown did not delete the session clip: %r" % (has_clip_after,)
+        )

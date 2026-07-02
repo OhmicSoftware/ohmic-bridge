@@ -208,6 +208,10 @@ class TrackHandler(AbletonOSCHandler):
         def track_get_arrangement_clip_loop_ends(track, _):
             return tuple(clip.loop_end for clip in track.arrangement_clips)
 
+        @guarded_lom("track_get_arrangement_clip_start_markers")
+        def track_get_arrangement_clip_start_markers(track, _):
+            return tuple(clip.start_marker for clip in track.arrangement_clips)
+
         @guarded_lom("track_get_arrangement_clip_colors")
         def track_get_arrangement_clip_colors(track, _):
             return tuple(
@@ -235,6 +239,7 @@ class TrackHandler(AbletonOSCHandler):
         self.osc_server.add_handler("/live/track/get/arrangement_clips/looping", create_track_callback(track_get_arrangement_clip_looping))
         self.osc_server.add_handler("/live/track/get/arrangement_clips/loop_start", create_track_callback(track_get_arrangement_clip_loop_starts))
         self.osc_server.add_handler("/live/track/get/arrangement_clips/loop_end", create_track_callback(track_get_arrangement_clip_loop_ends))
+        self.osc_server.add_handler("/live/track/get/arrangement_clips/start_marker", create_track_callback(track_get_arrangement_clip_start_markers))
         self.osc_server.add_handler("/live/track/get/arrangement_clips/color", create_track_callback(track_get_arrangement_clip_colors))
         self.osc_server.add_handler("/live/track/get/arrangement_clips/color_index", create_track_callback(track_get_arrangement_clip_color_indices))
 
