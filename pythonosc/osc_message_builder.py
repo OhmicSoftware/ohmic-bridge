@@ -112,10 +112,10 @@ class OscMessageBuilder(object):
         elif arg_value is False:
             arg_type = self.ARG_TYPE_FALSE
         elif isinstance(arg_value, int):
-            if arg_value.bit_length() > 32:
-                arg_type = self.ARG_TYPE_INT64
-            else:
+            if -(1 << 31) <= arg_value < (1 << 31):
                 arg_type = self.ARG_TYPE_INT
+            else:
+                arg_type = self.ARG_TYPE_INT64
         elif isinstance(arg_value, float):
             arg_type = self.ARG_TYPE_FLOAT
         elif isinstance(arg_value, tuple) and len(arg_value) == 4:
