@@ -83,6 +83,24 @@ class OSCServer:
             self._socket.sendto(msg.dgram, remote_addr)
         except BuildError:
             self.logger.error("AbletonOSC: OSC build error: %s" % (traceback.format_exc()))
+        except OSError as e:
+            #--------------------------------------------------------------------------------
+            # An unsendable reply - most commonly EMSGSIZE from a reply
+            # larger than one UDP datagram - must never escape into the
+            # processing loop: it would abort every message queued behind
+            # it this tick and repeat forever while the client retries
+            # (observed 2026-08-30: an oversized reply burst left the
+            # server unable to answer anything). Log the offending
+            # address and size, drop the reply, and keep serving; the
+            # client's own timeout already covers a lost datagram.
+            #--------------------------------------------------------------------------------
+            try:
+                size = len(msg.dgram)
+            except Exception:
+                size = -1
+            self.logger.error(
+                "AbletonOSC: Could not send OSC reply %s (%d bytes) to %s: %s"
+                % (address, size, str(remote_addr), e))
 
     def process_message(self, message, remote_addr):
         if message.address in self._callbacks:
@@ -163,7 +181,18 @@ class OSCServer:
                 # This is slightly ugly and prevents registering listeners from different IPs.
                 #--------------------------------------------------------------------------------
                 self._remote_addr = (remote_addr[0], OSC_RESPONSE_PORT)
-                self.parse_bundle(data, remote_addr)
+                try:
+                    self.parse_bundle(data, remote_addr)
+                except Exception:
+                    #--------------------------------------------------------------------------------
+                    # One mishandled datagram must not abort the drain
+                    # loop and starve everything queued behind it - log
+                    # it and keep draining. recvfrom's own socket errors
+                    # still reach the outer handler below.
+                    #--------------------------------------------------------------------------------
+                    self.logger.error(
+                        "AbletonOSC: Error processing datagram: %s"
+                        % (traceback.format_exc()))
 
         except socket.error as e:
             if e.errno == errno.ECONNRESET:

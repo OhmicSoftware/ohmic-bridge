@@ -77,9 +77,9 @@ def _fresh_track_module():
     return importlib.reload(module)
 
 
-def test_bridge_version_is_0_5_0():
+def test_bridge_version_is_0_5_1():
     manager = _fresh_manager_module()
-    assert manager.BRIDGE_VERSION == (0, 5, 0)
+    assert manager.BRIDGE_VERSION == (0, 5, 1)
 
 
 def test_ableton_stub_repairs_existing_incomplete_control_surface_module():

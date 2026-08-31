@@ -496,6 +496,45 @@ class ClipHandler(AbletonOSCHandler):
             "/live/arrangement_clip/get/name",
             create_arrangement_clip_callback(arrangement_clip_get_name))
 
+        @guarded_lom("arrangement_clip_set_loop")
+        def arrangement_clip_set_loop(clip, params: Tuple[Any] = ()):
+            # Set an arrangement clip's loop state. looping, loop_start
+            # and loop_end are documented read-write Clip properties (the
+            # same setters session clips use); the loop region is what
+            # Live repeats when a looping arrangement clip is longer than
+            # its loop.
+            if len(params) != 3:
+                raise ValueError(
+                    "Invalid number of arguments for "
+                    "/live/arrangement_clip/set/loop. Three arguments "
+                    "(looping, loop_start, loop_end) required.")
+            looping = bool(int(params[0]))
+            loop_start = float(params[1])
+            loop_end = float(params[2])
+            # Live rejects a loop_end at or below loop_start, so order the
+            # two writes by direction: growing the region sets loop_end
+            # first, shrinking it sets loop_start first.
+            if loop_end > clip.loop_start:
+                clip.loop_end = loop_end
+                clip.loop_start = loop_start
+            else:
+                clip.loop_start = loop_start
+                clip.loop_end = loop_end
+            clip.looping = looping
+            return None
+
+        self.osc_server.add_handler(
+            "/live/arrangement_clip/set/loop",
+            create_arrangement_clip_callback(arrangement_clip_set_loop))
+
+        @guarded_lom("arrangement_clip_get_loop")
+        def arrangement_clip_get_loop(clip, params: Tuple[Any] = ()):
+            return (int(clip.looping), clip.loop_start, clip.loop_end)
+
+        self.osc_server.add_handler(
+            "/live/arrangement_clip/get/loop",
+            create_arrangement_clip_callback(arrangement_clip_get_loop))
+
         def clips_filter_handler(params: Tuple):
             # TODO: Pre-cache clip notes
             if len(self._clip_notes_cache) == 0:
