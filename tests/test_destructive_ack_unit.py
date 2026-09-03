@@ -77,9 +77,9 @@ def _fresh_track_module():
     return importlib.reload(module)
 
 
-def test_bridge_version_is_0_5_1():
+def test_bridge_version_is_0_5_2():
     manager = _fresh_manager_module()
-    assert manager.BRIDGE_VERSION == (0, 5, 1)
+    assert manager.BRIDGE_VERSION == (0, 5, 2)
 
 
 def test_ableton_stub_repairs_existing_incomplete_control_surface_module():
@@ -257,7 +257,8 @@ def test_arrangement_clip_get_notes_default_includes_pitch_127():
 
     reply = callbacks["/live/arrangement_clip/get/notes"]((0, 0))
 
-    assert reply == (0, 0, 127, 0.0, 1.0, 100, False, 1.0)
+    # No request tail to echo, one page holding the one note.
+    assert reply == (0, 0, 1, 1, 127, 0.0, 1.0, 100, False, 1.0)
     assert handler.song.tracks[0].arrangement_clips[0].queried_args == (
         0,
         128,

@@ -225,7 +225,7 @@ def test_stop_all_clips_stops_firing_clip(osc, _quantization_none):
         notes_reply = osc.query(
             "/live/clip/get/notes", [track_idx, slot_idx],
         )
-        assert len(notes_reply) >= 8, (
+        assert len(notes_reply) >= 10, (
             "add/notes did not land — got %r" % (notes_reply,)
         )
 

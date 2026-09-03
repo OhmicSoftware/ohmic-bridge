@@ -187,7 +187,7 @@ def test_track_stop_all_clips_stops_track_clip(osc):
         notes_reply = osc.query(
             "/live/clip/get/notes", [track_idx, slot_idx],
         )
-        assert len(notes_reply) >= 8, (
+        assert len(notes_reply) >= 10, (
             "add/notes did not land — got %r" % (notes_reply,)
         )
 

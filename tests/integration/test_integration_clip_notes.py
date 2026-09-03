@@ -53,15 +53,18 @@ def test_add_and_read_single_note_roundtrips_every_field(osc):
         [TRACK_ID, CLIP_ID, 60, 0.5, 1.0, 100, 0, 0.75])
     wait_one_tick()
     result = osc.query("/live/clip/get/notes", [TRACK_ID, CLIP_ID])
-    # Wire format: (track, slot, pitch, start, dur, vel, mute, prob)
+    # Wire format: (track, slot, page_count, total_notes,
+    #               pitch, start, dur, vel, mute, prob)
     assert result[0] == TRACK_ID
     assert result[1] == CLIP_ID
-    assert result[2] == 60
-    assert result[3] == pytest.approx(0.5)
-    assert result[4] == pytest.approx(1.0)
-    assert result[5] == 100
-    assert result[6] == 0
-    assert result[7] == pytest.approx(0.75)
+    assert result[2] == 1
+    assert result[3] == 1
+    assert result[4] == 60
+    assert result[5] == pytest.approx(0.5)
+    assert result[6] == pytest.approx(1.0)
+    assert result[7] == 100
+    assert result[8] == 0
+    assert result[9] == pytest.approx(0.75)
 
 
 def test_remove_notes_by_range_preserves_other_notes(osc):
@@ -78,22 +81,30 @@ def test_remove_notes_by_range_preserves_other_notes(osc):
     wait_one_tick()
     result = osc.query("/live/clip/get/notes", [TRACK_ID, CLIP_ID])
     # Expect only the C3 note (pitch 60, start 0.0) to remain
-    # (2 echoed + 6 fields = 8 entries for one note)
-    assert len(result) == 8
-    assert result[2] == 60
+    # (2 echoed + 2 header + 6 fields = 10 entries for one note)
+    assert len(result) == 10
+    assert result[4] == 60
 
 
 def _decode_notes(reply):
     """Decode a /live/clip/get/notes reply into a list of per-note dicts.
 
-    Wire format: (track, slot, pitch, start, dur, vel, mute, prob,
-                  pitch, start, dur, vel, mute, prob, ...).
+    Wire format for a 0-arg request: (track, slot, page_count,
+    total_notes, pitch, start, dur, vel, mute, prob, pitch, ...).
+    Every read here fits one page; a longer clip is read page by page
+    (see test_get_notes_pages_a_clip_past_one_page).
     Returns a list where each entry captures the six fields for one
     note so tests can do set-based / field-wise comparisons rather
     than wrestling with flat-tuple indices."""
-    assert len(reply) >= 2, "reply must echo (track, slot) — got %r" % (reply,)
+    assert len(reply) >= 4, (
+        "reply must echo (track, slot) and the paging header — got %r" % (reply,)
+    )
     track_echo, slot_echo = reply[0], reply[1]
-    payload = reply[2:]
+    assert reply[2] == 1, "raw read got page 0 of %d pages: %r" % (reply[2], reply)
+    payload = reply[4:]
+    assert len(payload) == reply[3] * 6, (
+        "note payload disagrees with total_notes=%r: %r" % (reply[3], reply)
+    )
     assert len(payload) % 6 == 0, (
         "note payload length must be a multiple of 6 — got %d entries: %r"
         % (len(payload), reply)
@@ -254,3 +265,45 @@ def test_remove_notes_by_id(osc):
         "removed pitch %d unexpectedly present in final notes"
         % removed_pitch
     )
+
+
+def _decode_page(reply, page_index):
+    """Decode one page of a (track, slot, page_index) request."""
+    assert reply[:3] == (TRACK_ID, CLIP_ID, page_index), reply[:3]
+    page_count, total_notes = reply[3], reply[4]
+    payload = reply[5:]
+    assert len(payload) % 6 == 0, len(payload)
+    notes = [
+        (int(payload[offset]), float(payload[offset + 1]))
+        for offset in range(0, len(payload), 6)
+    ]
+    return page_count, total_notes, notes
+
+
+def test_get_notes_pages_a_clip_past_one_page(osc):
+    """350 notes come back complete across two pages, none repeated."""
+    # abletonosc.clip imports Live, so mirror its constant here.
+    MAX_NOTES_PER_PAGE = 300
+
+    written = [
+        (index % 127, float(index // 127))
+        for index in range(MAX_NOTES_PER_PAGE + 50)
+    ]
+    # 50 notes per add/notes keeps each request datagram small too.
+    for offset in range(0, len(written), 50):
+        args = [TRACK_ID, CLIP_ID]
+        for pitch, start in written[offset:offset + 50]:
+            args += [pitch, start, 0.5, 100, 0, 1.0]
+        osc.send_message("/live/clip/add/notes", args)
+        wait_one_tick()
+    wait_one_tick()
+
+    page_count, total_notes, first = _decode_page(
+        osc.query("/live/clip/get/notes", [TRACK_ID, CLIP_ID, 0]), 0)
+    assert (page_count, total_notes) == (2, len(written))
+    assert len(first) == MAX_NOTES_PER_PAGE
+    second_count, second_total, second = _decode_page(
+        osc.query("/live/clip/get/notes", [TRACK_ID, CLIP_ID, 1]), 1)
+    assert (second_count, second_total) == (2, len(written))
+    assert len(first) + len(second) == len(written)
+    assert sorted(first + second) == sorted(written)

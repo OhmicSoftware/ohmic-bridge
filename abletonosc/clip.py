@@ -1,6 +1,59 @@
 import re
 from typing import Tuple, Callable, Any, Optional
 from .handler import AbletonOSCHandler, guarded_lom
+from .constants import MAX_REPLY_BYTES
+
+# Notes per page of a /get/notes reply. A note is five 4-byte OSC args plus
+# a boolean mute carried in the type tags, about 26 bytes on the wire, so
+# 300 notes are roughly 7.9 KB - inside MAX_REPLY_BYTES and the 9,216-byte
+# UDP datagram macOS allows by default. Ohmic mirrors this value.
+MAX_NOTES_PER_PAGE = 300
+
+
+def _paged_notes_reply(clip, params, default_pitch_span, address):
+    """Answer one page of a notes read.
+
+    Request forms after (track, clip): (), (page_index),
+    (pitch_start, pitch_span, time_start, time_span), or that window
+    followed by page_index. The reply echoes the request tail as received,
+    then page_count and total_notes, then at most MAX_NOTES_PER_PAGE
+    six-field notes: the page's slice of the note list Live returns for
+    the window (pitch, then time order). A page_index outside
+    [0, page_count) raises ValueError, which guarded_lom turns into the
+    standard error reply.
+    """
+    if len(params) in (0, 1):
+        pitch_start, pitch_span, time_start, time_span = (
+            0, default_pitch_span, -8192, 16384,
+        )
+    elif len(params) in (4, 5):
+        pitch_start, pitch_span, time_start, time_span = params[:4]
+    else:
+        raise ValueError(
+            "Invalid number of arguments for %s. Pass 0, 1 (page_index), 4 "
+            "(pitch_start, pitch_span, time_start, time_span) or 5 (that "
+            "window plus page_index) arguments." % address)
+    page_index = int(params[-1]) if len(params) in (1, 5) else 0
+    notes = list(clip.get_notes_extended(
+        pitch_start, pitch_span, time_start, time_span
+    ))
+    total_notes = len(notes)
+    page_count = max(
+        1, (total_notes + MAX_NOTES_PER_PAGE - 1) // MAX_NOTES_PER_PAGE,
+    )
+    if page_index < 0 or page_index >= page_count:
+        raise ValueError(
+            "page_index %d is outside the %d page(s) of %s"
+            % (page_index, page_count, address))
+    result = list(params) + [page_count, total_notes]
+    first = page_index * MAX_NOTES_PER_PAGE
+    for note in notes[first:first + MAX_NOTES_PER_PAGE]:
+        probability = getattr(note, "probability", 1.0)
+        result.extend((
+            note.pitch, note.start_time, note.duration,
+            note.velocity, note.mute, probability,
+        ))
+    return tuple(result)
 import Live
 
 def note_name_to_midi(name):
@@ -130,23 +183,7 @@ class ClipHandler(AbletonOSCHandler):
 
         @guarded_lom("clip_get_notes")
         def clip_get_notes(clip, params: Tuple[Any] = ()):
-            if len(params) == 4:
-                pitch_start, pitch_span, time_start, time_span = params
-            elif len(params) == 0:
-                pitch_start, pitch_span, time_start, time_span = 0, 127, -8192, 16384
-            else:
-                raise ValueError("Invalid number of arguments for /clip/get/notes. Either 0 or 4 arguments must be passed.")
-            notes = clip.get_notes_extended(
-                pitch_start, pitch_span, time_start, time_span
-            )
-            result = []
-            for note in notes:
-                probability = getattr(note, "probability", 1.0)
-                result.extend((
-                    note.pitch, note.start_time, note.duration,
-                    note.velocity, note.mute, probability,
-                ))
-            return tuple(result)
+            return _paged_notes_reply(clip, params, 127, "/clip/get/notes")
 
         @guarded_lom("clip_add_notes")
         def clip_add_notes(clip, params: Tuple[Any] = ()):
@@ -389,23 +426,9 @@ class ClipHandler(AbletonOSCHandler):
 
         @guarded_lom("arrangement_clip_get_notes")
         def arrangement_clip_get_notes(clip, params: Tuple[Any] = ()):
-            if len(params) == 4:
-                pitch_start, pitch_span, time_start, time_span = params
-            elif len(params) == 0:
-                pitch_start, pitch_span, time_start, time_span = 0, 128, -8192, 16384
-            else:
-                raise ValueError("Invalid number of arguments for /arrangement_clip/get/notes. Either 0 or 4 arguments must be passed.")
-            notes = clip.get_notes_extended(
-                pitch_start, pitch_span, time_start, time_span
+            return _paged_notes_reply(
+                clip, params, 128, "/arrangement_clip/get/notes",
             )
-            result = []
-            for note in notes:
-                probability = getattr(note, "probability", 1.0)
-                result.extend((
-                    note.pitch, note.start_time, note.duration,
-                    note.velocity, note.mute, probability,
-                ))
-            return tuple(result)
 
         self.osc_server.add_handler("/live/arrangement_clip/get/notes", create_arrangement_clip_callback(arrangement_clip_get_notes))
 
