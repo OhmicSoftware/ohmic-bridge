@@ -151,10 +151,20 @@ def test_arrangement_delta_changes_when_arrangement_clip_notes_change(osc):
     clip_index = _find_clip_index_by_start(osc, safe_start)
 
     try:
-        snapshot_reply = osc.query("/live/song/get/arrangement_snapshot", [])
-        snapshot = json.loads(snapshot_reply[-1])
-        assert snapshot["status"] == "ok"
-        before_clip = snapshot["clips"][str(TRACK_ID)][clip_index]
+        manifest_reply = osc.query(
+            "/live/song/get/arrangement_snapshot_manifest", [])
+        manifest = json.loads(manifest_reply[-1])
+        assert manifest["status"] == "ok"
+        clips = {}
+        for chunk_index in range(manifest["chunk_count"]):
+            chunk_reply = osc.query(
+                "/live/song/get/arrangement_snapshot_chunk",
+                [manifest["snapshot_id"], chunk_index],
+            )
+            chunk = json.loads(chunk_reply[-1])
+            for track_key, track_clips in chunk["clips"].items():
+                clips.setdefault(track_key, []).extend(track_clips)
+        before_clip = clips[str(TRACK_ID)][clip_index]
         before_signature = before_clip["notes_signature"]
 
         osc.send_message(
@@ -164,7 +174,7 @@ def test_arrangement_delta_changes_when_arrangement_clip_notes_change(osc):
         wait_one_tick()
 
         delta_reply = osc.query(
-            "/live/song/get/arrangement_delta", [snapshot["revision"]])
+            "/live/song/get/arrangement_delta", [manifest["revision"]])
         delta = json.loads(delta_reply[-1])
         assert delta["status"] == "ok"
         assert len(delta["changes"]) == 1
@@ -489,8 +499,9 @@ def test_remove_arrangement_clip_notes(osc):
 
 def test_arrangement_clip_start_marker_readback_via_bulk_endpoint_and_snapshot(osc):
     """Verify the new /live/track/get/arrangement_clips/start_marker bulk
-    endpoint and the arrangement_snapshot's per-clip "start_marker" key
-    (abletonosc/arrangement_view.py's ``_clip_row``) both surface the
+    endpoint and the arrangement snapshot manifest+chunks' per-clip
+    "start_marker" key (abletonosc/arrangement_view.py's ``_clip_row``)
+    both surface the
     LOM's ``Clip.start_marker`` for a freshly-created, untrimmed
     arrangement clip. Ohmic's Arrangement View consumes these to
     render trimmed clips correctly; this is the real-Ableton evidence
@@ -525,14 +536,24 @@ def test_arrangement_clip_start_marker_readback_via_bulk_endpoint_and_snapshot(o
             % (markers[clip_index], markers)
         )
 
-        # Snapshot: clip row must carry "start_marker" alongside the
-        # pre-existing "loop_start" key.
-        snapshot_reply = osc.query("/live/song/get/arrangement_snapshot", [])
-        snapshot = json.loads(snapshot_reply[-1])
-        assert snapshot["status"] == "ok"
-        clip_row = snapshot["clips"][str(TRACK_ID)][clip_index]
+        # Snapshot manifest + chunks: clip row must carry "start_marker"
+        # alongside the pre-existing "loop_start" key.
+        manifest_reply = osc.query(
+            "/live/song/get/arrangement_snapshot_manifest", [])
+        manifest = json.loads(manifest_reply[-1])
+        assert manifest["status"] == "ok"
+        clips = {}
+        for chunk_index in range(manifest["chunk_count"]):
+            chunk_reply = osc.query(
+                "/live/song/get/arrangement_snapshot_chunk",
+                [manifest["snapshot_id"], chunk_index],
+            )
+            chunk = json.loads(chunk_reply[-1])
+            for track_key, track_clips in chunk["clips"].items():
+                clips.setdefault(track_key, []).extend(track_clips)
+        clip_row = clips[str(TRACK_ID)][clip_index]
         assert "start_marker" in clip_row, (
-            "arrangement_snapshot clip row is missing the 'start_marker' "
+            "arrangement snapshot clip row is missing the 'start_marker' "
             "key: %r" % (clip_row,)
         )
         assert clip_row["start_marker"] == pytest.approx(0.0), (

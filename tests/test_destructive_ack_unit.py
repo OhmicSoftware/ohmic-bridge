@@ -77,9 +77,16 @@ def _fresh_track_module():
     return importlib.reload(module)
 
 
-def test_bridge_version_is_0_5_2():
+def _fresh_song_module():
+    _stub_ableton_modules()
+    _stub_bridge_package()
+    module = importlib.import_module(f"{PACKAGE_NAME}.abletonosc.song")
+    return importlib.reload(module)
+
+
+def test_bridge_version_is_0_5_3():
     manager = _fresh_manager_module()
-    assert manager.BRIDGE_VERSION == (0, 5, 2)
+    assert manager.BRIDGE_VERSION == (0, 5, 3)
 
 
 def test_ableton_stub_repairs_existing_incomplete_control_surface_module():

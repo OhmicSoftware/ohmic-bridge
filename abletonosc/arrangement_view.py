@@ -6,8 +6,10 @@ import copy
 import hashlib
 import json
 
+from .constants import MAX_REPLY_BYTES
+
 SCHEMA_VERSION = 1
-MAX_ARRANGEMENT_SNAPSHOT_CHUNK_BYTES = 8192
+MAX_ARRANGEMENT_SNAPSHOT_CHUNK_BYTES = MAX_REPLY_BYTES
 
 
 class ArrangementIdentityError(RuntimeError):
@@ -236,22 +238,6 @@ def _error_payload(code: str, message: str) -> dict:
         "code": code,
         "message": message,
     }
-
-
-def build_arrangement_snapshot(song, *, revision: int) -> dict:
-    """Build a complete Arrangement View snapshot from Live's current song."""
-    try:
-        body = _snapshot_body(song)
-    except ArrangementIdentityError as exc:
-        return _error_payload("identity_unavailable", str(exc))
-    except ArrangementNoteSignatureError as exc:
-        return _error_payload("notes_unavailable", str(exc))
-    body.update({
-        "status": "ok",
-        "schema_version": SCHEMA_VERSION,
-        "revision": int(revision),
-    })
-    return body
 
 
 def _encoded_json_size(payload: dict) -> int:
@@ -504,13 +490,6 @@ class ArrangementDeltaCache:
     def revision(self) -> int:
         return self._revision
 
-    def snapshot(self, song) -> dict:
-        self._revision += 1
-        snapshot = build_arrangement_snapshot(song, revision=self._revision)
-        if snapshot.get("status") == "ok":
-            self._snapshot = copy.deepcopy(snapshot)
-        return snapshot
-
     def snapshot_manifest(self, song) -> dict:
         self._revision += 1
         chunked = build_arrangement_snapshot_chunks(
@@ -576,25 +555,14 @@ class ArrangementDeltaCache:
         changes = []
 
         if _metadata_changed(previous, current):
-            self._revision += 1
-            full = copy.deepcopy(current)
-            full.update({
-                "status": "ok",
-                "schema_version": SCHEMA_VERSION,
-                "revision": self._revision,
-            })
-            self._snapshot = copy.deepcopy(full)
             return {
-                "status": "ok",
+                "status": "resync_required",
                 "schema_version": SCHEMA_VERSION,
-                "base_revision": int(since_revision),
-                "revision": self._revision,
-                "changes": [
-                    {
-                        "type": "replace_snapshot",
-                        "snapshot": full,
-                    }
-                ],
+                "code": "metadata_changed",
+                "message": (
+                    "Arrangement track layout changed; a full resync "
+                    "is required."
+                ),
             }
 
         for track_key, clips in current.get("clips", {}).items():
@@ -620,6 +588,24 @@ class ArrangementDeltaCache:
                 "changes": [],
             }
 
+        reply = {
+            "status": "ok",
+            "schema_version": SCHEMA_VERSION,
+            "base_revision": int(since_revision),
+            "revision": self._revision + 1,
+            "changes": changes,
+        }
+        if _encoded_json_size(reply) > MAX_REPLY_BYTES:
+            return {
+                "status": "resync_required",
+                "schema_version": SCHEMA_VERSION,
+                "code": "delta_too_large",
+                "message": (
+                    "Arrangement delta exceeds the reply byte budget; "
+                    "a full resync is required."
+                ),
+            }
+
         self._revision += 1
         current.update({
             "status": "ok",
@@ -627,10 +613,4 @@ class ArrangementDeltaCache:
             "revision": self._revision,
         })
         self._snapshot = copy.deepcopy(current)
-        return {
-            "status": "ok",
-            "schema_version": SCHEMA_VERSION,
-            "base_revision": int(since_revision),
-            "revision": self._revision,
-            "changes": changes,
-        }
+        return reply

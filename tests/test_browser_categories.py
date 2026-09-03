@@ -6,6 +6,9 @@ import sys
 import types
 
 import pytest
+from pythonosc.osc_message_builder import OscMessageBuilder
+
+MAC_UDP_DATAGRAM_CAP = 9216
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -722,8 +725,39 @@ def test_metadata_page_payload_stays_below_page_byte_limit(
     )
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
-    assert len(payload["items"]) == browser_module.MAX_METADATA_PAGE_LIMIT
-    assert len(encoded.encode("utf-8")) <= browser_module.MAX_METADATA_PAGE_BYTES
+    assert len(payload["items"]) <= browser_module.MAX_METADATA_PAGE_LIMIT
+    assert len(encoded.encode("utf-8")) <= browser_module.MAX_REPLY_BYTES
+
+
+def test_full_metadata_page_fits_the_mac_datagram_cap(
+    browser_module, tmp_path, monkeypatch
+):
+    root = tmp_path / "User Library"
+    rack_dir = root / "Presets" / "Instruments" / "Instrument Rack"
+    rack_dir.mkdir(parents=True)
+    descriptive_name = "Cinematic Ambient Pad Warm Analog Texture Design"
+    paths = []
+    for index in range(browser_module.MAX_METADATA_PAGE_LIMIT):
+        file_name = "%s %03d.adg" % (descriptive_name, index)
+        (rack_dir / file_name).write_bytes(b"payload")
+        paths.append("Presets/Instruments/Instrument Rack/%s" % file_name)
+    monkeypatch.setattr(browser_module, "_bridge_user_library_root", lambda: str(root))
+
+    payload = browser_module._metadata_for_category_items(
+        browser=object(),
+        category="instrument_racks",
+        offset=0,
+        limit=browser_module.MAX_METADATA_PAGE_LIMIT,
+        paths=paths,
+    )
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    builder = OscMessageBuilder("/live/browser/get/metadata_page")
+    builder.add_arg(encoded)
+    datagram_size = len(builder.build().dgram)
+
+    assert len(payload["items"]) < browser_module.MAX_METADATA_PAGE_LIMIT
+    assert payload["next_offset"] is not None
+    assert datagram_size <= MAC_UDP_DATAGRAM_CAP
 
 
 def test_metadata_items_sanitize_absolute_paths_for_path_only_stale_and_ambiguous(
@@ -814,7 +848,7 @@ def test_first_oversized_metadata_item_does_not_exceed_page_byte_limit(
     root.mkdir()
     monkeypatch.setattr(browser_module, "_bridge_user_library_root", lambda: str(root))
     huge_path = "Presets/Instruments/Instrument Rack/%s.adg" % (
-        "x" * (browser_module.MAX_METADATA_PAGE_BYTES + 1000)
+        "x" * (browser_module.MAX_REPLY_BYTES + 1000)
     )
 
     payload = browser_module._metadata_for_category_items(
@@ -826,7 +860,7 @@ def test_first_oversized_metadata_item_does_not_exceed_page_byte_limit(
     )
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
-    assert len(encoded.encode("utf-8")) <= browser_module.MAX_METADATA_PAGE_BYTES
+    assert len(encoded.encode("utf-8")) <= browser_module.MAX_REPLY_BYTES
     assert payload["next_offset"] in (None, 1)
     if payload["items"]:
         assert len(payload["items"][0]["browser_path"]) < len(huge_path)
@@ -897,3 +931,86 @@ def test_metadata_page_endpoint_returns_json_payload_for_category(
     assert payload["total"] == 1
     assert payload["next_offset"] is None
     assert payload["items"][0]["metadata_status"] == "path_only"
+
+
+def _handler_with_category_items(browser_module, monkeypatch, items):
+    callbacks = {}
+
+    class _Server:
+        def add_handler(self, address, callback):
+            callbacks[address] = callback
+
+    handler = browser_module.BrowserHandler.__new__(browser_module.BrowserHandler)
+    handler.osc_server = _Server()
+    handler._get_browser = lambda: _BrowserStub(instruments=object())
+    monkeypatch.setattr(
+        browser_module,
+        "_collect_category_items",
+        lambda browser, category: list(items),
+    )
+    handler.init_api()
+    return callbacks
+
+
+def test_get_names_truncates_with_marker_when_reply_exceeds_budget(
+    browser_module, monkeypatch
+):
+    names = ["Instrument Preset Name Number %04d For Testing" % i for i in range(300)]
+    callbacks = _handler_with_category_items(browser_module, monkeypatch, names)
+
+    reply = callbacks["/live/browser/get/names"](("instruments",))
+    shown = len(reply) - 2
+
+    assert reply[0] == "instruments"
+    assert shown < len(names)
+    assert reply[-1] == (
+        "TRUNCATED: showing %d of %d items - use search_browser_items to find specific items"
+        % (shown, len(names))
+    )
+    assert "—" not in reply[-1]
+    builder = OscMessageBuilder("/live/browser/get/names")
+    for arg in reply:
+        builder.add_arg(arg)
+    assert len(builder.build().dgram) <= MAC_UDP_DATAGRAM_CAP
+
+
+def test_get_names_small_category_returns_all_names_without_marker(
+    browser_module, monkeypatch
+):
+    names = ["Bass.adg", "Lead.adv", "Pad.adg"]
+    callbacks = _handler_with_category_items(browser_module, monkeypatch, names)
+
+    reply = callbacks["/live/browser/get/names"](("instruments",))
+
+    assert reply == ("instruments", *names)
+
+
+def test_search_items_truncates_with_marker_when_matches_exceed_budget(
+    browser_module, monkeypatch
+):
+    names = ["Instrument Preset Match Name Number %04d" % i for i in range(300)]
+    callbacks = _handler_with_category_items(browser_module, monkeypatch, names)
+
+    reply = callbacks["/live/browser/search"](("instruments", "match"))
+    shown = len(reply) - 3
+
+    assert reply[:2] == ("instruments", "match")
+    assert shown < len(names)
+    assert reply[-1] == (
+        "TRUNCATED: showing %d of %d matches - refine the query" % (shown, len(names))
+    )
+    builder = OscMessageBuilder("/live/browser/search")
+    for arg in reply:
+        builder.add_arg(arg)
+    assert len(builder.build().dgram) <= MAC_UDP_DATAGRAM_CAP
+
+
+def test_search_items_returns_all_matches_without_marker_when_they_fit(
+    browser_module, monkeypatch
+):
+    names = ["Bass Match.adg", "Lead Match.adv"]
+    callbacks = _handler_with_category_items(browser_module, monkeypatch, names)
+
+    reply = callbacks["/live/browser/search"](("instruments", "match"))
+
+    assert reply == ("instruments", "match", *names)

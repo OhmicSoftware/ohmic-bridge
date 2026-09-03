@@ -208,7 +208,7 @@ def _encoded_size(payload):
 
 
 def test_build_arrangement_snapshot_includes_live_ptr_clip_ids():
-    from abletonosc.arrangement_view import build_arrangement_snapshot
+    from abletonosc.arrangement_view import build_arrangement_snapshot_chunks
 
     song = _Song(
         [
@@ -219,18 +219,22 @@ def test_build_arrangement_snapshot_includes_live_ptr_clip_ids():
         current_song_time=12.5,
     )
 
-    data = _decode(build_arrangement_snapshot(song, revision=7))
+    chunked = build_arrangement_snapshot_chunks(song, revision=7)
+    manifest = chunked["manifest"]
+    clips = {}
+    for chunk in chunked["chunks"]:
+        clips.update(chunk["clips"])
 
-    assert data["status"] == "ok"
-    assert data["schema_version"] == 1
-    assert data["revision"] == 7
-    assert data["track_names"] == ["Bass", "Lead"]
-    assert data["track_indices"] == [0, 1]
-    assert data["midi_tracks"] == [True, True]
-    assert data["track_colors"] == ["#112233", "#112233"]
-    assert data["is_group_tracks"] == [False, False]
-    assert data["group_parent_indices"] == [None, None]
-    assert data["clips"] == {
+    assert manifest["status"] == "ok"
+    assert manifest["schema_version"] == 1
+    assert manifest["revision"] == 7
+    assert manifest["track_names"] == ["Bass", "Lead"]
+    assert manifest["track_indices"] == [0, 1]
+    assert manifest["midi_tracks"] == [True, True]
+    assert manifest["track_colors"] == ["#112233", "#112233"]
+    assert manifest["is_group_tracks"] == [False, False]
+    assert manifest["group_parent_indices"] == [None, None]
+    assert clips == {
         "0": [
             {
                 "index": 0,
@@ -250,14 +254,14 @@ def test_build_arrangement_snapshot_includes_live_ptr_clip_ids():
         ],
         "1": [],
     }
-    assert data["locators"] == [{"name": "Verse", "time": 16.0}]
-    assert data["current_song_time"] == 12.5
+    assert manifest["locators"] == [{"name": "Verse", "time": 16.0}]
+    assert manifest["current_song_time"] == 12.5
 
 
 def test_build_arrangement_snapshot_chunks_keep_many_clips_under_budget():
     from abletonosc.arrangement_view import (
         MAX_ARRANGEMENT_SNAPSHOT_CHUNK_BYTES,
-        build_arrangement_snapshot,
+        _snapshot_body,
         build_arrangement_snapshot_chunks,
     )
 
@@ -278,7 +282,7 @@ def test_build_arrangement_snapshot_chunks_keep_many_clips_under_budget():
     song = _Song(tracks, [_CuePoint("Drop", 64.0)], current_song_time=12.5)
 
     chunked = build_arrangement_snapshot_chunks(song, revision=42)
-    full = build_arrangement_snapshot(song, revision=42)
+    body = _snapshot_body(song)
 
     manifest = chunked["manifest"]
     chunks = chunked["chunks"]
@@ -286,15 +290,15 @@ def test_build_arrangement_snapshot_chunks_keep_many_clips_under_budget():
     assert manifest["schema_version"] == 1
     assert manifest["revision"] == 42
     assert manifest["chunk_count"] == len(chunks)
-    assert manifest["track_names"] == full["track_names"]
-    assert manifest["track_indices"] == full["track_indices"]
-    assert manifest["midi_tracks"] == full["midi_tracks"]
-    assert manifest["track_colors"] == full["track_colors"]
-    assert manifest["is_group_tracks"] == full["is_group_tracks"]
-    assert manifest["group_parent_indices"] == full["group_parent_indices"]
-    assert manifest["locators"] == full["locators"]
-    assert manifest["locators_available"] == full["locators_available"]
-    assert manifest["current_song_time"] == full["current_song_time"]
+    assert manifest["track_names"] == body["track_names"]
+    assert manifest["track_indices"] == body["track_indices"]
+    assert manifest["midi_tracks"] == body["midi_tracks"]
+    assert manifest["track_colors"] == body["track_colors"]
+    assert manifest["is_group_tracks"] == body["is_group_tracks"]
+    assert manifest["group_parent_indices"] == body["group_parent_indices"]
+    assert manifest["locators"] == body["locators"]
+    assert manifest["locators_available"] == body["locators_available"]
+    assert manifest["current_song_time"] == body["current_song_time"]
     assert "clips" not in manifest
     assert chunks
     assert all(
@@ -310,7 +314,7 @@ def test_build_arrangement_snapshot_chunks_keep_many_clips_under_budget():
     rebuilt_clips = {}
     for chunk in chunks:
         rebuilt_clips.update(chunk["clips"])
-    assert rebuilt_clips == full["clips"]
+    assert rebuilt_clips == body["clips"]
 
 
 def test_build_arrangement_snapshot_chunks_page_single_oversized_track():
@@ -346,7 +350,7 @@ def test_build_arrangement_snapshot_chunks_page_single_oversized_track():
 
 
 def test_build_arrangement_snapshot_includes_loop_metadata():
-    from abletonosc.arrangement_view import build_arrangement_snapshot
+    from abletonosc.arrangement_view import _snapshot_body
 
     song = _Song([
         _Track(
@@ -367,9 +371,9 @@ def test_build_arrangement_snapshot_includes_loop_metadata():
         )
     ])
 
-    data = _decode(build_arrangement_snapshot(song, revision=1))
+    body = _snapshot_body(song)
 
-    clip = data["clips"]["0"][0]
+    clip = body["clips"]["0"][0]
     assert clip["start"] == 8.0
     assert clip["length"] == 4.0
     assert clip["end"] == 24.0
@@ -380,7 +384,7 @@ def test_build_arrangement_snapshot_includes_loop_metadata():
 
 
 def test_build_arrangement_snapshot_includes_group_parent_indices():
-    from abletonosc.arrangement_view import build_arrangement_snapshot
+    from abletonosc.arrangement_view import _snapshot_body
 
     group = _Track("Strings Group", has_midi_input=False, is_foldable=True)
     child = _Track(
@@ -392,11 +396,10 @@ def test_build_arrangement_snapshot_includes_group_parent_indices():
     outside = _Track("Bass", [_Clip(201, "Bass", 0.0, 8.0)])
     song = _Song([group, child, outside])
 
-    data = _decode(build_arrangement_snapshot(song, revision=3))
+    body = _snapshot_body(song)
 
-    assert data["status"] == "ok"
-    assert data["is_group_tracks"] == [True, False, False]
-    assert data["group_parent_indices"] == [None, 0, None]
+    assert body["is_group_tracks"] == [True, False, False]
+    assert body["group_parent_indices"] == [None, 0, None]
 
 
 def test_track_index_for_parent_matches_live_ptr_when_object_identity_differs():
@@ -440,11 +443,11 @@ def test_track_index_for_parent_matches_live_object_equality():
 
 
 def test_build_arrangement_snapshot_reports_missing_identity():
-    from abletonosc.arrangement_view import build_arrangement_snapshot
+    from abletonosc.arrangement_view import build_arrangement_snapshot_chunks
 
     song = _Song([_Track("Bass", [_Clip(None, "Intro", 0.0, 8.0)])])
 
-    data = _decode(build_arrangement_snapshot(song, revision=1))
+    data = build_arrangement_snapshot_chunks(song, revision=1)
 
     assert data["status"] == "error"
     assert data["code"] == "identity_unavailable"
@@ -452,7 +455,7 @@ def test_build_arrangement_snapshot_reports_missing_identity():
 
 
 def test_build_arrangement_snapshot_reports_unreadable_clip_notes():
-    from abletonosc.arrangement_view import build_arrangement_snapshot
+    from abletonosc.arrangement_view import build_arrangement_snapshot_chunks
 
     song = _Song([
         _Track(
@@ -469,7 +472,7 @@ def test_build_arrangement_snapshot_reports_unreadable_clip_notes():
         )
     ])
 
-    data = _decode(build_arrangement_snapshot(song, revision=1))
+    data = build_arrangement_snapshot_chunks(song, revision=1)
 
     assert data["status"] == "error"
     assert data["code"] == "notes_unavailable"
@@ -496,7 +499,7 @@ def test_build_arrangement_snapshot_chunks_reports_oversized_clip_payload():
 
 
 def test_build_arrangement_snapshot_skips_note_signature_for_audio_tracks():
-    from abletonosc.arrangement_view import build_arrangement_snapshot
+    from abletonosc.arrangement_view import _snapshot_body
 
     audio_clip = _Clip(
         101,
@@ -509,11 +512,10 @@ def test_build_arrangement_snapshot_skips_note_signature_for_audio_tracks():
         _Track("Audio", [audio_clip], has_midi_input=False)
     ])
 
-    data = _decode(build_arrangement_snapshot(song, revision=1))
+    body = _snapshot_body(song)
 
-    assert data["status"] == "ok"
-    assert data["midi_tracks"] == [False]
-    assert data["clips"]["0"][0]["notes_signature"] is None
+    assert body["midi_tracks"] == [False]
+    assert body["clips"]["0"][0]["notes_signature"] is None
     assert audio_clip._notes_call_count == 0
 
 
@@ -522,15 +524,15 @@ def test_delta_cache_returns_no_changes_when_snapshot_is_unchanged():
 
     song = _Song([_Track("Bass", [_Clip(101, "Intro", 0.0, 8.0)])])
     cache = ArrangementDeltaCache()
-    snapshot = cache.snapshot(song)
+    manifest = cache.snapshot_manifest(song)
 
-    delta = _decode(cache.delta(song, since_revision=snapshot["revision"]))
+    delta = _decode(cache.delta(song, since_revision=manifest["revision"]))
 
     assert delta == {
         "status": "ok",
         "schema_version": 1,
-        "base_revision": snapshot["revision"],
-        "revision": snapshot["revision"],
+        "base_revision": manifest["revision"],
+        "revision": manifest["revision"],
         "changes": [],
     }
 
@@ -758,7 +760,7 @@ def test_delta_cache_replaces_only_changed_track_clips():
     lead = _Track("Lead", [_Clip(201, "Hook", 16.0, 4.0)])
     song = _Song([bass, lead])
     cache = ArrangementDeltaCache()
-    snapshot = cache.snapshot(song)
+    manifest = cache.snapshot_manifest(song)
 
     lead.arrangement_clips = [_Clip(
         202,
@@ -768,11 +770,11 @@ def test_delta_cache_replaces_only_changed_track_clips():
         color=0x778899,
         color_index=18,
     )]
-    delta = _decode(cache.delta(song, since_revision=snapshot["revision"]))
+    delta = _decode(cache.delta(song, since_revision=manifest["revision"]))
 
     assert delta["status"] == "ok"
-    assert delta["base_revision"] == snapshot["revision"]
-    assert delta["revision"] == snapshot["revision"] + 1
+    assert delta["base_revision"] == manifest["revision"]
+    assert delta["revision"] == manifest["revision"] + 1
     assert delta["changes"] == [
         {
             "type": "replace_track_clips",
@@ -804,14 +806,14 @@ def test_delta_cache_replaces_track_clips_when_clip_color_changes():
     bass = _Track("Bass", [_Clip(101, "Intro", 0.0, 8.0)])
     song = _Song([bass])
     cache = ArrangementDeltaCache()
-    snapshot = cache.snapshot(song)
+    manifest = cache.snapshot_manifest(song)
 
     bass.arrangement_clips[0].color = 0x99AABB
     bass.arrangement_clips[0].color_index = 21
-    delta = _decode(cache.delta(song, since_revision=snapshot["revision"]))
+    delta = _decode(cache.delta(song, since_revision=manifest["revision"]))
 
     assert delta["status"] == "ok"
-    assert delta["revision"] == snapshot["revision"] + 1
+    assert delta["revision"] == manifest["revision"] + 1
     assert delta["changes"] == [
         {
             "type": "replace_track_clips",
@@ -854,15 +856,16 @@ def test_delta_cache_replaces_track_clips_when_clip_notes_change():
     )
     song = _Song([bass])
     cache = ArrangementDeltaCache()
-    snapshot = cache.snapshot(song)
+    manifest = cache.snapshot_manifest(song)
 
-    old_signature = snapshot["clips"]["0"][0]["notes_signature"]
+    baseline_chunk = cache.snapshot_chunk(manifest["snapshot_id"], 0)
+    old_signature = baseline_chunk["clips"]["0"][0]["notes_signature"]
     bass.arrangement_clips[0]._notes.append(_Note(50, 1.0, 0.5, 92))
 
-    delta = _decode(cache.delta(song, since_revision=snapshot["revision"]))
+    delta = _decode(cache.delta(song, since_revision=manifest["revision"]))
 
     assert delta["status"] == "ok"
-    assert delta["revision"] == snapshot["revision"] + 1
+    assert delta["revision"] == manifest["revision"] + 1
     changed = delta["changes"][0]
     assert changed["type"] == "replace_track_clips"
     assert changed["track_index"] == 0
@@ -887,12 +890,12 @@ def test_delta_cache_returns_no_changes_when_notes_are_unchanged():
     )
     song = _Song([bass])
     cache = ArrangementDeltaCache()
-    snapshot = cache.snapshot(song)
+    manifest = cache.snapshot_manifest(song)
 
-    delta = _decode(cache.delta(song, since_revision=snapshot["revision"]))
+    delta = _decode(cache.delta(song, since_revision=manifest["revision"]))
 
     assert delta["status"] == "ok"
-    assert delta["revision"] == snapshot["revision"]
+    assert delta["revision"] == manifest["revision"]
     assert delta["changes"] == []
 
 
@@ -902,39 +905,78 @@ def test_delta_cache_reports_unreadable_clip_notes():
     bass = _Track("Bass", [_Clip(101, "Intro", 0.0, 8.0)])
     song = _Song([bass])
     cache = ArrangementDeltaCache()
-    snapshot = cache.snapshot(song)
+    manifest = cache.snapshot_manifest(song)
 
     bass.arrangement_clips[0]._notes_error = RuntimeError(
         "notes temporarily unavailable"
     )
-    delta = _decode(cache.delta(song, since_revision=snapshot["revision"]))
+    delta = _decode(cache.delta(song, since_revision=manifest["revision"]))
 
     assert delta["status"] == "error"
     assert delta["code"] == "notes_unavailable"
     assert "Arrangement clip notes are unavailable" in delta["message"]
 
 
-def test_delta_cache_reuses_current_body_when_metadata_changes():
+def test_delta_cache_requires_resync_when_metadata_changes():
+    """A track-metadata change (e.g. rename) forces a resync instead of
+    embedding a full snapshot in the delta reply."""
     from abletonosc.arrangement_view import ArrangementDeltaCache
 
-    clip = _Clip(101, "Intro", 0.0, 8.0, notes_error_after_calls=2)
-    bass = _Track("Bass", [clip])
+    bass = _Track("Bass", [_Clip(101, "Intro", 0.0, 8.0)])
     song = _Song([bass])
     cache = ArrangementDeltaCache()
-    snapshot = cache.snapshot(song)
+    manifest = cache.snapshot_manifest(song)
+    revision_before = cache.revision
 
     bass.name = "Bass Renamed"
-    delta = _decode(cache.delta(song, since_revision=snapshot["revision"]))
+    delta = _decode(cache.delta(song, since_revision=manifest["revision"]))
 
-    assert delta["status"] == "ok"
-    assert delta["revision"] == snapshot["revision"] + 1
-    assert delta["changes"][0]["type"] == "replace_snapshot"
-    replacement = delta["changes"][0]["snapshot"]
-    assert replacement["status"] == "ok"
-    assert replacement["revision"] == delta["revision"]
-    assert replacement["track_names"] == ["Bass Renamed"]
-    assert replacement["clips"]["0"][0]["notes_signature"] == "0:0"
-    assert clip._notes_call_count == 2
+    assert delta["status"] == "resync_required"
+    assert delta["schema_version"] == 1
+    assert delta["code"] == "metadata_changed"
+    assert delta["message"]
+    assert cache.revision == revision_before
+
+
+def test_delta_cache_requires_resync_when_diff_exceeds_reply_budget():
+    """A track-clip diff too large for one reply forces a resync instead
+    of an oversized delta reply."""
+    from abletonosc.arrangement_view import ArrangementDeltaCache
+
+    bass = _Track("Bass", [])
+    song = _Song([bass])
+    cache = ArrangementDeltaCache()
+    manifest = cache.snapshot_manifest(song)
+    revision_before = cache.revision
+
+    bass.arrangement_clips = [
+        _Clip(
+            3000 + index,
+            f"Oversized diff clip {index:02d} " + ("payload " * 80),
+            float(index * 2),
+            2.0,
+        )
+        for index in range(30)
+    ]
+    delta = _decode(cache.delta(song, since_revision=manifest["revision"]))
+
+    assert delta["status"] == "resync_required"
+    assert delta["schema_version"] == 1
+    assert delta["code"] == "delta_too_large"
+    assert delta["message"]
+    assert cache.revision == revision_before
+
+    bass.arrangement_clips = [_Clip(4000, "Small baseline clip", 0.0, 2.0)]
+    next_manifest = cache.snapshot_manifest(song)
+    bass.arrangement_clips.append(
+        _Clip(4001, "Small follow-up clip", 200.0, 2.0)
+    )
+    next_delta = _decode(
+        cache.delta(song, since_revision=next_manifest["revision"])
+    )
+
+    assert next_delta["status"] == "ok"
+    assert next_delta["changes"]
 
 
 def test_delta_cache_requests_snapshot_when_base_revision_is_unknown():
@@ -942,7 +984,7 @@ def test_delta_cache_requests_snapshot_when_base_revision_is_unknown():
 
     song = _Song([_Track("Bass", [_Clip(101, "Intro", 0.0, 8.0)])])
     cache = ArrangementDeltaCache()
-    cache.snapshot(song)
+    cache.snapshot_manifest(song)
 
     delta = _decode(cache.delta(song, since_revision=999))
 

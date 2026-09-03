@@ -9,6 +9,60 @@ from typing import Tuple, Any
 
 from .handler import AbletonOSCHandler, guarded_lom, guarded_lom_json
 from .arrangement_view import ArrangementDeltaCache, _track_index_for_parent
+from .constants import MAX_REPLY_BYTES
+
+# Fixed allowance for the clip_grid page envelope
+# ({"page_index":,"page_count":,"clips":{},"clip_colors":{}}) plus
+# headroom for page_index/page_count digit counts far beyond any
+# plausible Live set size.
+_CLIP_GRID_ENVELOPE_BYTES = len(
+    json.dumps(
+        {"page_index": 0, "page_count": 0, "clips": {}, "clip_colors": {}},
+        separators=(",", ":"),
+    )
+) + 20
+
+
+def _clip_grid_entry_bytes(key, name, color):
+    """Upper-bound byte cost of adding one entry to both the clips and
+    clip_colors dicts, without re-encoding the whole growing page."""
+    key_json = json.dumps(key)
+    name_json = json.dumps(name)
+    color_json = json.dumps(color)
+    return (
+        len(key_json) + 1 + len(name_json) + 1
+        + len(key_json) + 1 + len(color_json) + 1
+    )
+
+
+def _clip_grid_pages(entries):
+    """Split (key, name, color) entries into pages whose encoded JSON
+    stays within MAX_REPLY_BYTES. An empty entry list yields one empty
+    page."""
+    pages = [[]]
+    budget_used = _CLIP_GRID_ENVELOPE_BYTES
+    for entry in entries:
+        cost = _clip_grid_entry_bytes(*entry)
+        if pages[-1] and budget_used + cost > MAX_REPLY_BYTES:
+            pages.append([])
+            budget_used = _CLIP_GRID_ENVELOPE_BYTES
+        pages[-1].append(entry)
+        budget_used += cost
+    return pages
+
+
+def _clip_grid_page_json(page_index, page_count, entries):
+    clips = {}
+    clip_colors = {}
+    for key, name, color in entries:
+        clips[key] = name
+        clip_colors[key] = color
+    return json.dumps({
+        "page_index": page_index,
+        "page_count": page_count,
+        "clips": clips,
+        "clip_colors": clip_colors,
+    }, separators=(",", ":"))
 
 class SongHandler(AbletonOSCHandler):
     def __init__(self, manager):
@@ -238,16 +292,18 @@ class SongHandler(AbletonOSCHandler):
         self.osc_server.add_handler("/live/song/get/playing_positions", playing_positions)
 
         @guarded_lom_json("clip_grid")
-        def clip_grid(_):
-            """Return occupied clip slots with names and colors in one call.
+        def clip_grid(params):
+            """Return occupied clip slots with names and colors, paged so
+            each reply stays within the shared reply byte budget.
 
-            Response: JSON string with clips dict and clip_colors dict,
-            keyed by "track_idx,slot_idx".
+            Response: JSON string with page_index, page_count, a clips
+            dict and a clip_colors dict, keyed by "track_idx,slot_idx".
+            An absent page_index argument returns page 0 in the legacy
+            single-element reply shape.
             """
             tracks = self.song.tracks
             num_scenes = len(self.song.scenes)
-            clips = {}
-            clip_colors = {}
+            entries = []
             for track_idx, track in enumerate(tracks):
                 for slot_idx, clip_slot in enumerate(track.clip_slots):
                     if slot_idx >= num_scenes:
@@ -256,24 +312,36 @@ class SongHandler(AbletonOSCHandler):
                         if clip_slot.clip is not None:
                             key = "%d,%d" % (track_idx, slot_idx)
                             name = clip_slot.clip.name
-                            clips[key] = name if name else "(unnamed)"
                             c = clip_slot.clip.color
-                            clip_colors[key] = "#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
+                            color = "#%02x%02x%02x" % ((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF)
+                            entries.append((key, name if name else "(unnamed)", color))
                     except Exception as ce:
                         self.logger.error("clip_grid slot [%d,%d] failed: %s" % (track_idx, slot_idx, ce))
-            data = {
-                "clips": clips,
-                "clip_colors": clip_colors,
-            }
-            result = json.dumps(data)
-            self.logger.debug("clip_grid: %d clips, %d bytes" % (len(clips), len(result)))
-            return (result,)
-        self.osc_server.add_handler("/live/song/get/clip_grid", clip_grid)
 
-        @guarded_lom_json("arrangement_snapshot")
-        def arrangement_snapshot(_):
-            data = self._arrangement_delta_cache.snapshot(self.song)
-            return (json.dumps(data),)
+            pages = _clip_grid_pages(entries)
+            page_count = len(pages)
+
+            if not params:
+                result = _clip_grid_page_json(0, page_count, pages[0])
+                self.logger.debug("clip_grid: %d clips, %d bytes" % (len(pages[0]), len(result)))
+                return (result,)
+
+            raw_page_index = params[0]
+            try:
+                page_index = int(raw_page_index)
+            except (TypeError, ValueError):
+                page_index = None
+            if page_index is None or page_index < 0 or page_index >= page_count:
+                return (raw_page_index, json.dumps({
+                    "error": "clip_grid page_index %r out of range (page_count %d)" % (raw_page_index, page_count),
+                    "handler": "clip_grid",
+                }))
+
+            result = _clip_grid_page_json(page_index, page_count, pages[page_index])
+            self.logger.debug("clip_grid: page %d/%d, %d clips, %d bytes" % (
+                page_index, page_count, len(pages[page_index]), len(result)))
+            return (page_index, result)
+        self.osc_server.add_handler("/live/song/get/clip_grid", clip_grid)
 
         @guarded_lom_json("arrangement_delta")
         def arrangement_delta(params):
@@ -295,8 +363,6 @@ class SongHandler(AbletonOSCHandler):
                 snapshot_id, chunk_index)
             return (snapshot_id, chunk_index, json.dumps(data))
 
-        self.osc_server.add_handler(
-            "/live/song/get/arrangement_snapshot", arrangement_snapshot)
         self.osc_server.add_handler(
             "/live/song/get/arrangement_delta", arrangement_delta)
         self.osc_server.add_handler(

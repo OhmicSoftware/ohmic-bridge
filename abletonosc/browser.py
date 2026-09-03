@@ -7,6 +7,7 @@ from pathlib import PureWindowsPath
 import sys
 from typing import Tuple, Optional
 from . import browser_metadata
+from .constants import MAX_REPLY_BYTES
 from .handler import AbletonOSCHandler, guarded_lom, guarded_lom_json
 
 logger = logging.getLogger("abletonosc")
@@ -74,10 +75,12 @@ def _max_for_live_unsupported_error(category, browser):
 
 
 MAX_DEPTH = 5
-MAX_RESULTS = 500
 MAX_METADATA_PAGE_LIMIT = 25
-MAX_METADATA_PAGE_BYTES = 45000
 MAX_METADATA_BROWSER_PATH_CHARS = 1024
+NAMES_TRUNCATION_MARKER = (
+    "TRUNCATED: showing %d of %d items - use search_browser_items to find specific items"
+)
+SEARCH_TRUNCATION_MARKER = "TRUNCATED: showing %d of %d matches - refine the query"
 MAX_FOR_LIVE_COMPOSITE_ATTRS = (
     "max_for_live",
     "audio_effects",
@@ -458,6 +461,15 @@ def _json_payload_size(payload):
     return len(_json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
 
+def _osc_string_arg_bytes(text):
+    """Approximate encoded size of one OSC string argument: the string
+    is null-terminated and padded to a 4-byte boundary, plus a 4-byte
+    allowance for its share of the type-tag string."""
+    encoded_length = len(str(text).encode("utf-8")) + 1
+    padded_length = ((encoded_length + 3) // 4) * 4
+    return padded_length + 4
+
+
 def _metadata_for_category_items(browser, category, offset=0, limit=MAX_METADATA_PAGE_LIMIT, paths=None):
     try:
         offset = max(0, int(offset))
@@ -508,7 +520,7 @@ def _metadata_for_category_items(browser, category, offset=0, limit=MAX_METADATA
         )
         candidate = dict(payload)
         candidate["items"] = list(payload["items"]) + [item]
-        if _json_payload_size(candidate) > MAX_METADATA_PAGE_BYTES and payload["items"]:
+        if _json_payload_size(candidate) > MAX_REPLY_BYTES and payload["items"]:
             break
         payload["items"].append(item)
         consumed += 1
@@ -834,10 +846,19 @@ class BrowserHandler(AbletonOSCHandler):
             logger.info("browser/get/names: found %d items in %s" % (total, category_str))
             if not results:
                 return (category_str, "empty")
-            # Cap results to avoid exceeding UDP packet size limit
-            if total > MAX_RESULTS:
-                results = results[:MAX_RESULTS]
-                results.append("TRUNCATED: showing %d of %d items — use search_browser_items to find specific items" % (MAX_RESULTS, total))
+            # Byte-budget results to stay within one Bridge reply datagram
+            # (see MAX_REPLY_BYTES) instead of a plain item-count cap.
+            budget = 64 + _osc_string_arg_bytes(NAMES_TRUNCATION_MARKER % (total, total))
+            shown = []
+            for name in results:
+                cost = _osc_string_arg_bytes(name)
+                if budget + cost > MAX_REPLY_BYTES:
+                    break
+                shown.append(name)
+                budget += cost
+            if len(shown) < total:
+                shown.append(NAMES_TRUNCATION_MARKER % (len(shown), total))
+            results = shown
             # Echo category_str first so Ohmic's response key matching works
             return (category_str, *results)
 
@@ -1089,8 +1110,20 @@ class BrowserHandler(AbletonOSCHandler):
                         % (len(matches), query_str, category_str, len(all_items)))
             if not matches:
                 return (category_str, query_str, "no matches")
-            if len(matches) > MAX_RESULTS:
-                matches = matches[:MAX_RESULTS]
+            total = len(matches)
+            # Byte-budget matches to stay within one Bridge reply datagram
+            # (see MAX_REPLY_BYTES) instead of a plain match-count cap.
+            budget = 64 + _osc_string_arg_bytes(SEARCH_TRUNCATION_MARKER % (total, total))
+            shown = []
+            for item in matches:
+                cost = _osc_string_arg_bytes(item)
+                if budget + cost > MAX_REPLY_BYTES:
+                    break
+                shown.append(item)
+                budget += cost
+            if len(shown) < total:
+                shown.append(SEARCH_TRUNCATION_MARKER % (len(shown), total))
+            matches = shown
             # Echo category and query so response key matching works
             return (category_str, query_str, *matches)
 
