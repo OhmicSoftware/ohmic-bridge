@@ -100,12 +100,13 @@ def test_clip_slot_fire_flips_clip_is_playing_true(
     )
     wait_one_tick()
     notes_reply = osc.query("/live/clip/get/notes", [track_id, clip_id])
-    # Wire: (track, slot, pitch, start, dur, vel, mute, prob) -> 8 entries
-    assert len(notes_reply) >= 8, (
+    # Wire: (track, slot, page_count, total_notes, pitch, start, dur, vel,
+    # mute, prob) -> 10 entries
+    assert len(notes_reply) >= 10, (
         "clip must have at least 1 note before fire — got %r"
         % (notes_reply,)
     )
-    assert int(notes_reply[2]) == 60, (
+    assert int(notes_reply[4]) == 60, (
         "expected pitch-60 note in clip — got %r" % (notes_reply,)
     )
 
@@ -164,7 +165,7 @@ def test_clip_slot_stop_flips_clip_is_playing_false(
     )
     wait_one_tick()
     notes_reply = osc.query("/live/clip/get/notes", [track_id, clip_id])
-    assert len(notes_reply) >= 8, (
+    assert len(notes_reply) >= 10, (
         "clip must have at least 1 note before fire — got %r"
         % (notes_reply,)
     )

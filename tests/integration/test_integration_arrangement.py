@@ -131,7 +131,8 @@ def test_add_notes_to_arrangement_clip_roundtrips(osc):
             [TRACK_ID, clip_index, 60, 0.5, 1.0, 100, 0, 1.0])
         wait_one_tick()
         result = osc.query("/live/arrangement_clip/get/notes", [TRACK_ID, clip_index])
-        assert result[2] == 60
+        # (track, clip_index, page_count, total_notes, pitch, ...)
+        assert result[4] == 60
     finally:
         osc.send_message("/live/arrangement_clip/delete", [TRACK_ID, clip_index])
         wait_one_tick()
@@ -239,13 +240,19 @@ def test_arrangement_snapshot_chunks_roundtrip(osc):
 def _decode_arrangement_notes(reply):
     """Decode /live/arrangement_clip/get/notes reply into per-note dicts.
 
-    Wire format (matches clip.py's arrangement_clip_get_notes handler):
-    (track, clip_index, pitch, start, dur, vel, mute, prob, ...).
+    Wire format for a 0-arg request (matches clip.py's paged handler):
+    (track, clip_index, page_count, total_notes, pitch, start, dur, vel,
+    mute, prob, ...). Every read here fits one page.
     Mirrors the session-clip decoder in test_integration_clip_notes.py."""
-    assert len(reply) >= 2, (
-        "reply must echo (track, clip_index) — got %r" % (reply,)
+    assert len(reply) >= 4, (
+        "reply must echo (track, clip_index) and the paging header — got %r"
+        % (reply,)
     )
-    payload = reply[2:]
+    assert reply[2] == 1, "raw read got page 0 of %d pages: %r" % (reply[2], reply)
+    payload = reply[4:]
+    assert len(payload) == reply[3] * 6, (
+        "note payload disagrees with total_notes=%r: %r" % (reply[3], reply)
+    )
     assert len(payload) % 6 == 0, (
         "note payload length must be a multiple of 6 — got %d entries: %r"
         % (len(payload), reply)
@@ -611,8 +618,8 @@ def test_unlooped_session_clip_mirrors_start_marker_into_loop_start(osc):
         wait_one_tick()
 
         def read_notes():
-            # /live/clip/get/notes shares the (track, clip_index,
-            # pitch, start, dur, vel, mute, prob, ...) wire shape with
+            # /live/clip/get/notes shares the (track, clip_index, page_count,
+            # total_notes, pitch, start, dur, vel, mute, prob, ...) wire shape with
             # /live/arrangement_clip/get/notes, so the existing
             # decoder applies unchanged.
             return _decode_arrangement_notes(
