@@ -28,7 +28,7 @@ To install the script:
 - Restart Live
 - In `Settings > Link, Tempo & MIDI`, under the Control Surface dropdown, select **Ohmic_Bridge**. Live should display a message saying "Ohmic Bridge vX.Y.Z: Listening on port 11002"
 
-Activity logs will be output to a `logs` subdirectory. Logging granularity can be controlled with `/live/api/set/log_level` (see [Application API](#application-api) below).
+Activity logs are written to `logs/abletonosc.log`, rotating at 5 MiB with two backups (`.1` and `.2`). An existing oversized log is retained as a backup until later rotations replace it. Idle ticks are silent even at debug level. Logging granularity can be controlled with `/live/api/set/log_level` (see [Application API](#application-api) below); Ohmic diagnostics select `info`.
 
 # Usage
 
@@ -45,7 +45,7 @@ same IP as the originating message. When querying properties, OSC wildcard patte
 | /live/test                    |              | 'ok'                         | Display a confirmation message in Live, and sends an OSC reply to /live/test             |
 | /live/application/get/version |              | major_version, minor_version | Query Live's version                                                                     |
 | /live/api/reload              |              |                              | Initiates a live reload of the AbletonOSC server code. Used in development only.         |
-| /live/api/get/log_level       |              | log_level                    | Returns the current log level. Default is `info`.                                        |
+| /live/api/get/log_level       |              | log_level                    | Returns the current log level. Default is `warning`.                                     |
 | /live/api/set/log_level       | log_level    |                              | Set the log level, which can be one of: `debug`, `info`, `warning`, `error`, `critical`. |
 | /live/api/show_message        | message      |                              | Show a message in Live's status bar                                                      |
 | /live/api/ohmic/bridge_version |             | major, minor, patch          | Query the Ohmic Bridge version tuple. Used by Ohmic on connect to detect version skew.   |

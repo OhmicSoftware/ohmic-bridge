@@ -89,6 +89,22 @@ def test_bridge_version_is_0_5_3():
     assert manager.BRIDGE_VERSION == (0, 5, 3)
 
 
+def test_bridge_log_rotation_keeps_two_bounded_backups(tmp_path, monkeypatch):
+    module = _fresh_manager_module()
+    monkeypatch.setattr(module, "logger", module.logging.Logger("rotation-test"))
+    monkeypatch.setattr(module, "__file__", str(tmp_path / "manager.py"))
+    subject = types.SimpleNamespace(log_level="debug")
+    module.Manager.start_logging(subject)
+    try:
+        for _ in range(4):
+            subject.log_file_handler.emit(module.logging.makeLogRecord({"msg": "x" * (5 * 1024 * 1024 - 128)}))
+        logs = list((tmp_path / "logs").iterdir())
+        assert len(logs) == 3 and all(path.stat().st_size < 5 * 1024 * 1024 for path in logs)
+    finally:
+        module.Manager.stop_logging(subject)
+        subject.log_file_handler.close()
+
+
 def test_ableton_stub_repairs_existing_incomplete_control_surface_module():
     saved = {
         name: sys.modules.get(name)

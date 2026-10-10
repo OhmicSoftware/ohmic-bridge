@@ -7,6 +7,7 @@ from . import abletonosc
 import importlib
 import traceback
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 
 logger = logging.getLogger("abletonosc")
@@ -43,7 +44,7 @@ class Manager(ControlSurface):
 
     def start_logging(self):
         """
-        Start logging to a local logfile (logs/abletonosc.log),
+        Rotate logs/abletonosc.log at 5 MiB, retaining two backups,
         and relay error messages via OSC.
         """
         module_path = os.path.dirname(os.path.realpath(__file__))
@@ -51,7 +52,9 @@ class Manager(ControlSurface):
         if not os.path.exists(log_dir):
             os.mkdir(log_dir, 0o755)
         log_path = os.path.join(log_dir, "abletonosc.log")
-        self.log_file_handler = logging.FileHandler(log_path)
+        self.log_file_handler = RotatingFileHandler(
+            log_path, maxBytes=5 * 1024 * 1024, backupCount=2
+        )
         self.log_file_handler.setLevel(self.log_level.upper())
         logger.setLevel(self.log_level.upper())
         formatter = logging.Formatter('(%(asctime)s) [%(levelname)s] %(message)s')
@@ -74,6 +77,8 @@ class Manager(ControlSurface):
     def stop_logging(self):
         logger.removeHandler(self.log_file_handler)
         logger.removeHandler(self.live_osc_error_handler)
+        self.log_file_handler.close()
+        self.live_osc_error_handler.close()
 
     def init_api(self):
         def test_callback(params):
@@ -141,7 +146,6 @@ class Manager(ControlSurface):
         and beachballs when a thread is started. Instead, this approach allows long-running
         processes such as the OSC server to perform operations.
         """
-        logger.debug("Tick...")
         self.osc_server.process()
         self.schedule_message(1, self.tick)
 
