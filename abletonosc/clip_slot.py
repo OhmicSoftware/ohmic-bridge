@@ -66,3 +66,12 @@ class ClipSlotHandler(AbletonOSCHandler):
             clip_slot.duplicate_clip_to(target_clip_slot)
 
         self.osc_server.add_handler("/live/clip_slot/duplicate_clip_to", create_clip_slot_callback(duplicate_clip_slot))
+
+        @guarded_lom("clip_slot_get_clip_identity")
+        def clip_slot_get_clip_identity(clip_slot, params: Tuple[Any] = ()):
+            clip = clip_slot.clip
+            if clip is None:
+                return (None, None, None)
+            return (clip._live_ptr, clip.name, clip.length)
+
+        self.osc_server.add_handler("/live/clip_slot/get/clip_identity", create_clip_slot_callback(clip_slot_get_clip_identity))
